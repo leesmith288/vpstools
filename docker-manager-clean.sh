@@ -728,7 +728,7 @@ docker_menu() {
                     printf "${YELLOW}%2d)${NC} ${BOLD}%s${NC}\n" "$((i+1))" "$container"
                 done
                 
-                read -p \n'"$(echo -e ${BOLD}Project number: ${NC})" num
+                read -p "$(echo -e "${BOLD}Project number: ${NC}\n")" num
                 if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt 0 ] && [ "$num" -le "${#dirs[@]}" ]; then
                     cd "${dirs[$((num-1))]}" && docker compose pull && docker compose down && docker compose up -d
                     print_success "Updated!"
