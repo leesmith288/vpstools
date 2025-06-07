@@ -662,7 +662,7 @@ docker_menu() {
         echo -e "${YELLOW}  2)${NC} 🔄 ${BOLD}Update specific project${NC}"
         echo -e "${YELLOW}  3)${NC} ⚡ ${BOLD}Quick update (choose from list)${NC}"
         echo -e "${YELLOW}  4)${NC} 🔁 ${BOLD}Update all projects${NC}"
-        echo -e "${YELLOW}  5)${NC} 🧹 ${BOLD}Clean Docker system${NC}"} 🧹 ${BOLD}Clean Docker system${NC}"
+        echo -e "${YELLOW}  5)${NC} 🧹 ${BOLD}Clean Docker system${NC}"
         echo -e "${YELLOW}  6)${NC} 📊 ${BOLD}Show Docker disk usage${NC}"
         echo -e "${YELLOW}  7)${NC} 🔍 ${BOLD}View running containers${NC}"
         echo -e "${YELLOW}  8)${NC} 📜 ${BOLD}View container logs${NC}"
