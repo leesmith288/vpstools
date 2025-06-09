@@ -14,20 +14,7 @@ BOLD='\033[1m'        # Bold
 DIM='\033[2m'         # Dim
 NC='\033[0m'          # No Color
 
-# Smart exit function
-smart_exit() {
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-        exit "${1:-0}"
-    else
-        return "${1:-0}"
-    fi
-}
 
-# Then use it like:
-0)
-    echo "Exiting..."
-    smart_exit 0
-    ;;
 
 # Add extra line spacing function
 print_line() {
