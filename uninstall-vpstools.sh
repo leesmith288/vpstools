@@ -16,4 +16,4 @@ rm -f ~/.vps-function-index
 echo "✅ VPS Management Suite has been uninstalled"
 echo ""
 echo "To reinstall, run:"
-echo "bash <(curl -fsSL https://raw.githubusercontent.com/ccc/vpstools/main/installer.sh)"
+echo "bash <(curl -fsSL https://raw.githubusercontent.com/leesmith288/vpstools/main/installer.sh)"
