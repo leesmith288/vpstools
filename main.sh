@@ -19,7 +19,7 @@ BOLD='\033[1m'
 UNDERLINE='\033[4m'
 
 # Configuration
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 CONFIG_FILE="$SCRIPT_DIR/config.sh"
 LOG_FILE="/var/log/vps-suite.log"
 MODULES_DIR="$SCRIPT_DIR"
