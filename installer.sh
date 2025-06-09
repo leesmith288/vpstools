@@ -41,6 +41,18 @@ for script in "${SCRIPTS[@]}"; do
     fi
 done
 
+# Configure GitHub repository automatically
+echo "⚙️  Configuring repository settings..."
+echo "GITHUB_REPO=\"$GITHUB_REPO\"" | sudo tee "$INSTALL_DIR/config.sh" > /dev/null
+echo "$GITHUB_REPO" | sudo tee "$INSTALL_DIR/.github-repo" > /dev/null
+
+# Set correct permissions
+sudo chmod 644 "$INSTALL_DIR/config.sh"
+sudo chmod 644 "$INSTALL_DIR/.github-repo"
+
+echo -e "${GREEN}✓${NC} Repository configured"
+
+
 # Create a convenient symlink
 sudo ln -sf "$INSTALL_DIR/main.sh" /usr/local/bin/vps-manager
 
