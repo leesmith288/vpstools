@@ -156,12 +156,23 @@ build_function_index() {
         [[ ! -f "$module" ]] && continue
         local module_name=$(basename "$module")
         
-        # Extract functions and their descriptions
-        # Look for patterns like: function_name() { # Description
+        # Search for menu items and options in your scripts
+        # Look for patterns like "[1] Install Docker" or "echo '[2] Port Scan'"
+        grep -E "(\[[0-9]+\]|\[Aa\]|\[Bb\])" "$module" | while read -r line; do
+            # Extract the menu item text
+            local menu_item=$(echo "$line" | sed -E 's/.*\[([0-9A-Za-z]+)\][[:space:]]*//' | sed 's/"//g' | sed "s/'//g" | sed 's/echo.*\$//' | sed 's/print_color.*\$//' | cut -d'#' -f1 | xargs)
+            
+            if [[ -n "$menu_item" ]] && [[ ${#menu_item} -gt 3 ]]; then
+                # Create searchable entries
+                echo "$menu_item|Menu Option|$module_name" >> "$SEARCH_INDEX_FILE"
+            fi
+        done
+        
+        # Also look for function names (keep the original functionality)
         grep -E "^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{" "$module" | while read -r line; do
             local func_name=$(echo "$line" | sed 's/().*//' | xargs)
             local description=$(echo "$line" | grep -o '#.*' | sed 's/^#[[:space:]]*//')
-            [[ -n "$func_name" ]] && echo "$func_name|$description|$module_name" >> "$SEARCH_INDEX_FILE"
+            [[ -n "$func_name" ]] && echo "$func_name|Function|$module_name" >> "$SEARCH_INDEX_FILE"
         done
     done
 }
