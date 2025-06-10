@@ -427,17 +427,24 @@ check_module_updates() {
     fi
 }
 
-# Also update the download function to ensure consistency
+# update_all_modules (v3) - Corrected, robust self-updating logic
 update_all_modules() {
-    local modules=("$@")
+    local modules_to_update=("$@")
+    local main_script_needs_update=false
     
     echo -e "\n${WHITE}${BOLD}Updating modules...${NC}\n"
     
-    # Create backup directory
     local backup_dir="$SCRIPT_DIR/backups/$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     
-    for module in "${modules[@]}"; do
+    # --- First, update all other scripts EXCEPT main.sh ---
+    for module in "${modules_to_update[@]}"; do
+        if [[ "$module" == "main.sh" ]]; then
+            # Mark that main.sh needs an update and skip it for now
+            main_script_needs_update=true
+            continue
+        fi
+
         echo -e "${BLUE}▸${NC} Updating ${WHITE}$module${NC}..."
         
         # Backup existing file if it exists
@@ -446,14 +453,10 @@ update_all_modules() {
             echo -e "  Backup created"
         fi
         
-        # Download new version with proper handling
         local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module"
         
-        # Use curl with specific options to ensure consistent downloads
         if curl -sfL "$remote_url" -o "$MODULES_DIR/$module.tmp"; then
-            # Verify download
             if [[ -s "$MODULES_DIR/$module.tmp" ]]; then
-                # Move and set permissions
                 mv "$MODULES_DIR/$module.tmp" "$MODULES_DIR/$module"
                 chmod +x "$MODULES_DIR/$module"
                 echo -e "  ${GREEN}✓ Updated successfully${NC}"
@@ -467,10 +470,32 @@ update_all_modules() {
         echo
     done
     
+    # --- Now, if main.sh needs an update, handle it as the very last step ---
+    if [[ "$main_script_needs_update" == true ]]; then
+        echo -e "${BLUE}▸${NC} Updating main script: ${WHITE}main.sh${NC}..."
+        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/main.sh"
+        
+        # Download the new main.sh to a temporary file
+        if curl -sfL "$remote_url" -o "$MODULES_DIR/main.sh.tmp"; then
+            echo -e "  ${GREEN}✓ Main script update downloaded.${NC}"
+            echo -e "  ${YELLOW}The script will now restart to apply the update...${NC}"
+            
+            # The 'exec' command will replace the current script with a new shell.
+            # This new shell will wait, replace the file, and re-launch.
+            # This ensures the restart is the final action.
+            local self_update_cmd="sleep 1; mv \"$MODULES_DIR/main.sh.tmp\" \"$MODULES_DIR/main.sh\" && chmod +x \"$MODULES_DIR/main.sh\" && \"$MODULES_DIR/main.sh\""
+            
+            exec /bin/bash -c "$self_update_cmd"
+            # The script terminates here and is replaced by the new command
+        else
+            echo -e "  ${RED}✗ Download of main.sh failed. Restart will not occur.${NC}"
+        fi
+    fi
+    
+    # This part will only be reached if main.sh did NOT need an update
     print_success "Update process completed!"
     echo -e "\n${YELLOW}Backups saved to: $backup_dir${NC}"
     
-    # Rebuild function index after updates
     build_function_index
     
     echo -e "\nPress Enter to return..."
