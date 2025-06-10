@@ -32,8 +32,9 @@ sudo mkdir -p "$INSTALL_DIR"
 # Download all scripts
 for script in "${SCRIPTS[@]}"; do
     echo "📥 Downloading $script..."
-    if sudo curl -fsSL "https://raw.githubusercontent.com/$GITHUB_REPO/main/$script" -o "$INSTALL_DIR/$script"; then
+    if sudo curl -sfL "https://raw.githubusercontent.com/$GITHUB_REPO/main/$script" -o "$INSTALL_DIR/$script"; then
         sudo chmod +x "$INSTALL_DIR/$script"
+        sudo dos2unix "$INSTALL_DIR/$script" 2>/dev/null || sudo sed -i 's/\r$//' "$INSTALL_DIR/$script"
         echo -e "${GREEN}✓${NC} $script installed"
     else
         echo -e "${RED}✗${NC} Failed to download $script"
