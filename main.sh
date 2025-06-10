@@ -306,10 +306,28 @@ show_quick_actions() {
 }
 
 
-# Enhanced check_module_updates function with actual implementation
+# Enhanced check_module_updates with proper hash comparison
 check_module_updates() {
     clear
     print_header "🔄 CHECK FOR UPDATES"
+    
+    # Define files to exclude from update checks
+    local EXCLUDE_FILES=(
+        "config.sh"
+        "backup.sh"
+        "temp.sh"
+        "test.sh"
+        "local-settings.sh"
+    )
+    
+    # Function to check if file should be excluded
+    should_exclude() {
+        local file="$1"
+        for excluded in "${EXCLUDE_FILES[@]}"; do
+            [[ "$(basename "$file")" == "$excluded" ]] && return 0
+        done
+        return 1
+    }
     
     # Check if repo is configured
     if [[ "$GITHUB_REPO" == "your-username/your-repo" ]]; then
@@ -339,31 +357,59 @@ check_module_updates() {
     
     for module in "$MODULES_DIR"/*.sh; do
         [[ ! -f "$module" ]] && continue
-        local module_name=$(basename "$module")
-        local local_hash=$(sha256sum "$module" | cut -d' ' -f1)
         
-        echo -e "${BLUE}▸${NC} ${WHITE}$module_name${NC}"
-        echo -e "  Local hash: ${YELLOW}${local_hash:0:10}...${NC}"
-        
-        # Fetch remote file and calculate hash
-        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
-        local remote_content=$(curl -s "$remote_url")
-        
-        if [[ -z "$remote_content" ]]; then
-            echo -e "  Status: ${RED}✗ Not found on remote${NC}\n"
+        # Skip excluded files
+        if should_exclude "$module"; then
             continue
         fi
         
-        local remote_hash=$(echo -n "$remote_content" | sha256sum | cut -d' ' -f1)
+        local module_name=$(basename "$module")
+        
+        echo -e "${BLUE}▸${NC} ${WHITE}$module_name${NC}"
+        
+        # Fetch remote file
+        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
+        local temp_file="/tmp/${module_name}.tmp"
+        
+        # Download to temp file to ensure consistent comparison
+        if ! curl -s "$remote_url" -o "$temp_file" 2>/dev/null; then
+            echo -e "  Status: ${GRAY}○ Local only (not in repo)${NC}\n"
+            rm -f "$temp_file"
+            continue
+        fi
+        
+        # Check if download is valid (not 404 page)
+        if [[ ! -s "$temp_file" ]] || grep -q "404: Not Found" "$temp_file" 2>/dev/null; then
+            echo -e "  Status: ${GRAY}○ Local only (not in repo)${NC}\n"
+            rm -f "$temp_file"
+            continue
+        fi
+        
+        # Calculate hashes from actual files (not from strings)
+        local local_hash=$(sha256sum "$module" | cut -d' ' -f1)
+        local remote_hash=$(sha256sum "$temp_file" | cut -d' ' -f1)
+        
+        echo -e "  Local hash:  ${YELLOW}${local_hash:0:10}...${NC}"
         echo -e "  Remote hash: ${YELLOW}${remote_hash:0:10}...${NC}"
         
         if [[ "$local_hash" != "$remote_hash" ]]; then
-            echo -e "  Status: ${ORANGE}⚡ Update available${NC}\n"
-            modules_to_update+=("$module_name")
-            ((updates_available++))
+            # Do a secondary check - compare actual content after normalizing
+            # This handles line ending differences
+            local local_content=$(cat "$module" | tr -d '\r' | sed 's/[[:space:]]*$//')
+            local remote_content=$(cat "$temp_file" | tr -d '\r' | sed 's/[[:space:]]*$//')
+            
+            if [[ "$local_content" != "$remote_content" ]]; then
+                echo -e "  Status: ${ORANGE}⚡ Update available${NC}\n"
+                modules_to_update+=("$module_name")
+                ((updates_available++))
+            else
+                echo -e "  Status: ${GREEN}✓ Up to date${NC} (only whitespace differences)\n"
+            fi
         else
             echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
         fi
+        
+        rm -f "$temp_file"
     done
     
     # Check for new modules on remote
@@ -374,6 +420,11 @@ check_module_updates() {
     local remote_files=$(curl -s "$api_url" | grep -o '"name":"[^"]*\.sh"' | cut -d'"' -f4)
     
     for remote_file in $remote_files; do
+        # Skip excluded files even if they exist on remote
+        if should_exclude "$remote_file"; then
+            continue
+        fi
+        
         if [[ ! -f "$MODULES_DIR/$remote_file" ]]; then
             echo -e "${GREEN}▸ New module found: ${WHITE}$remote_file${NC}"
             modules_to_update+=("$remote_file")
@@ -408,7 +459,7 @@ check_module_updates() {
     fi
 }
 
-# Function to update all modules
+# Also update the download function to ensure consistency
 update_all_modules() {
     local modules=("$@")
     
@@ -427,11 +478,14 @@ update_all_modules() {
             echo -e "  Backup created"
         fi
         
-        # Download new version
+        # Download new version with proper handling
         local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module"
-        if curl -s "$remote_url" -o "$MODULES_DIR/$module.tmp"; then
+        
+        # Use curl with specific options to ensure consistent downloads
+        if curl -sfL "$remote_url" -o "$MODULES_DIR/$module.tmp"; then
             # Verify download
             if [[ -s "$MODULES_DIR/$module.tmp" ]]; then
+                # Move and set permissions
                 mv "$MODULES_DIR/$module.tmp" "$MODULES_DIR/$module"
                 chmod +x "$MODULES_DIR/$module"
                 echo -e "  ${GREEN}✓ Updated successfully${NC}"
@@ -453,57 +507,6 @@ update_all_modules() {
     
     echo -e "\nPress Enter to return..."
     read
-}
-
-# Function to select specific modules to update
-select_modules_to_update() {
-    local modules=("$@")
-    local selected=()
-    
-    clear
-    print_header "📦 SELECT MODULES TO UPDATE"
-    
-    echo -e "${WHITE}${BOLD}Available updates:${NC}\n"
-    
-    local count=1
-    for module in "${modules[@]}"; do
-        echo -e "${WHITE}${BOLD}[$count]${NC} $module"
-        ((count++))
-    done
-    
-    echo -e "\n${YELLOW}Enter module numbers separated by space (e.g., 1 3 4)${NC}"
-    echo -e "${YELLOW}Or press Enter to cancel${NC}\n"
-    read -p "Your selection: " selection
-    
-    if [[ -n "$selection" ]]; then
-        for num in $selection; do
-            if [[ $num -ge 1 ]] && [[ $num -le ${#modules[@]} ]]; then
-                selected+=("${modules[$((num-1))]}")
-            fi
-        done
-        
-        if [[ ${#selected[@]} -gt 0 ]]; then
-            update_all_modules "${selected[@]}"
-        else
-            print_warning "No valid selections made"
-            sleep 2
-        fi
-    fi
-}
-
-# Additional helper function to check single module update
-check_single_module_update() {
-    local module_name="$1"
-    local local_hash=$(sha256sum "$MODULES_DIR/$module_name" 2>/dev/null | cut -d' ' -f1)
-    local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
-    local remote_content=$(curl -s "$remote_url")
-    
-    if [[ -n "$remote_content" ]]; then
-        local remote_hash=$(echo -n "$remote_content" | sha256sum | cut -d' ' -f1)
-        [[ "$local_hash" != "$remote_hash" ]]
-    else
-        return 1
-    fi
 }
 
 # Settings menu
