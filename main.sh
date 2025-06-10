@@ -305,7 +305,8 @@ show_quick_actions() {
     fi
 }
 
-# Check for module updates
+
+# Enhanced check_module_updates function with actual implementation
 check_module_updates() {
     clear
     print_header "🔄 CHECK FOR UPDATES"
@@ -334,38 +335,175 @@ check_module_updates() {
     echo -e "${WHITE}${BOLD}Module Status:${NC}\n"
     
     local updates_available=0
+    local modules_to_update=()
     
     for module in "$MODULES_DIR"/*.sh; do
         [[ ! -f "$module" ]] && continue
         local module_name=$(basename "$module")
-        local local_hash=$(sha256sum "$module" | cut -d' ' -f1 | head -c 10)
+        local local_hash=$(sha256sum "$module" | cut -d' ' -f1)
         
         echo -e "${BLUE}▸${NC} ${WHITE}$module_name${NC}"
-        echo -e "  Local version: ${YELLOW}$local_hash...${NC}"
+        echo -e "  Local hash: ${YELLOW}${local_hash:0:10}...${NC}"
         
-        # Check remote version (simplified - implement actual GitHub API check)
-        # In real implementation, you'd fetch the remote file hash
-        echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
+        # Fetch remote file and calculate hash
+        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
+        local remote_content=$(curl -s "$remote_url")
+        
+        if [[ -z "$remote_content" ]]; then
+            echo -e "  Status: ${RED}✗ Not found on remote${NC}\n"
+            continue
+        fi
+        
+        local remote_hash=$(echo -n "$remote_content" | sha256sum | cut -d' ' -f1)
+        echo -e "  Remote hash: ${YELLOW}${remote_hash:0:10}...${NC}"
+        
+        if [[ "$local_hash" != "$remote_hash" ]]; then
+            echo -e "  Status: ${ORANGE}⚡ Update available${NC}\n"
+            modules_to_update+=("$module_name")
+            ((updates_available++))
+        else
+            echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
+        fi
+    done
+    
+    # Check for new modules on remote
+    echo -e "${WHITE}${BOLD}Checking for new modules...${NC}\n"
+    
+    # Get list of .sh files from GitHub repo
+    local api_url="https://api.github.com/repos/$GITHUB_REPO/contents"
+    local remote_files=$(curl -s "$api_url" | grep -o '"name":"[^"]*\.sh"' | cut -d'"' -f4)
+    
+    for remote_file in $remote_files; do
+        if [[ ! -f "$MODULES_DIR/$remote_file" ]]; then
+            echo -e "${GREEN}▸ New module found: ${WHITE}$remote_file${NC}"
+            modules_to_update+=("$remote_file")
+            ((updates_available++))
+        fi
     done
     
     if [[ $updates_available -gt 0 ]]; then
         echo -e "\n${WHITE}${BOLD}$updates_available update(s) available!${NC}"
+        echo -e "\nModules to update:"
+        for module in "${modules_to_update[@]}"; do
+            echo -e "  ${BLUE}▸${NC} $module"
+        done
+        
         echo -e "\n${WHITE}${BOLD}[U]${NC} Update all modules"
+        echo -e "${WHITE}${BOLD}[S]${NC} Select modules to update"
         echo -e "${WHITE}${BOLD}[M]${NC} Return to main menu\n"
         read -p "Your choice: " update_choice
         
-        if [[ "$update_choice" == "U" ]] || [[ "$update_choice" == "u" ]]; then
-            # Implement update logic here
-            print_info "Updating modules..."
-            sleep 2
-            print_success "Updates completed!"
-        fi
+        case $update_choice in
+            [Uu])
+                update_all_modules "${modules_to_update[@]}"
+                ;;
+            [Ss])
+                select_modules_to_update "${modules_to_update[@]}"
+                ;;
+        esac
     else
         echo -e "\n${GREEN}${BOLD}All modules are up to date!${NC}"
+        echo -e "\nPress Enter to return..."
+        read
     fi
+}
+
+# Function to update all modules
+update_all_modules() {
+    local modules=("$@")
+    
+    echo -e "\n${WHITE}${BOLD}Updating modules...${NC}\n"
+    
+    # Create backup directory
+    local backup_dir="$SCRIPT_DIR/backups/$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+    
+    for module in "${modules[@]}"; do
+        echo -e "${BLUE}▸${NC} Updating ${WHITE}$module${NC}..."
+        
+        # Backup existing file if it exists
+        if [[ -f "$MODULES_DIR/$module" ]]; then
+            cp "$MODULES_DIR/$module" "$backup_dir/"
+            echo -e "  Backup created"
+        fi
+        
+        # Download new version
+        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module"
+        if curl -s "$remote_url" -o "$MODULES_DIR/$module.tmp"; then
+            # Verify download
+            if [[ -s "$MODULES_DIR/$module.tmp" ]]; then
+                mv "$MODULES_DIR/$module.tmp" "$MODULES_DIR/$module"
+                chmod +x "$MODULES_DIR/$module"
+                echo -e "  ${GREEN}✓ Updated successfully${NC}"
+            else
+                rm -f "$MODULES_DIR/$module.tmp"
+                echo -e "  ${RED}✗ Download failed (empty file)${NC}"
+            fi
+        else
+            echo -e "  ${RED}✗ Download failed${NC}"
+        fi
+        echo
+    done
+    
+    print_success "Update process completed!"
+    echo -e "\n${YELLOW}Backups saved to: $backup_dir${NC}"
+    
+    # Rebuild function index after updates
+    build_function_index
     
     echo -e "\nPress Enter to return..."
     read
+}
+
+# Function to select specific modules to update
+select_modules_to_update() {
+    local modules=("$@")
+    local selected=()
+    
+    clear
+    print_header "📦 SELECT MODULES TO UPDATE"
+    
+    echo -e "${WHITE}${BOLD}Available updates:${NC}\n"
+    
+    local count=1
+    for module in "${modules[@]}"; do
+        echo -e "${WHITE}${BOLD}[$count]${NC} $module"
+        ((count++))
+    done
+    
+    echo -e "\n${YELLOW}Enter module numbers separated by space (e.g., 1 3 4)${NC}"
+    echo -e "${YELLOW}Or press Enter to cancel${NC}\n"
+    read -p "Your selection: " selection
+    
+    if [[ -n "$selection" ]]; then
+        for num in $selection; do
+            if [[ $num -ge 1 ]] && [[ $num -le ${#modules[@]} ]]; then
+                selected+=("${modules[$((num-1))]}")
+            fi
+        done
+        
+        if [[ ${#selected[@]} -gt 0 ]]; then
+            update_all_modules "${selected[@]}"
+        else
+            print_warning "No valid selections made"
+            sleep 2
+        fi
+    fi
+}
+
+# Additional helper function to check single module update
+check_single_module_update() {
+    local module_name="$1"
+    local local_hash=$(sha256sum "$MODULES_DIR/$module_name" 2>/dev/null | cut -d' ' -f1)
+    local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
+    local remote_content=$(curl -s "$remote_url")
+    
+    if [[ -n "$remote_content" ]]; then
+        local remote_hash=$(echo -n "$remote_content" | sha256sum | cut -d' ' -f1)
+        [[ "$local_hash" != "$remote_hash" ]]
+    else
+        return 1
+    fi
 }
 
 # Settings menu
