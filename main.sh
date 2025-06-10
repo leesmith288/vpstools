@@ -350,84 +350,59 @@ check_module_updates() {
         return
     fi
     
-    echo -e "${WHITE}${BOLD}Module Status:${NC}\n"
-    
     local updates_available=0
     local modules_to_update=()
+
+    # Get the definitive list of .sh files from the GitHub repo
+    print_info "Fetching file list from GitHub repository..."
+    local api_url="https://api.github.com/repos/$GITHUB_REPO/contents"
+    local remote_files=$(curl -s "$api_url" | grep -o '"name":"[^"]*\.sh"' | cut -d'"' -f4)
+
+    if [[ -z "$remote_files" ]]; then
+        print_error "Could not fetch file list from GitHub."
+        echo -e "${YELLOW}Please check your repository name and internet connection.${NC}"
+        echo -e "\nPress Enter to continue..."
+        read
+        return
+    fi
     
-    for module in "$MODULES_DIR"/*.sh; do
-        [[ ! -f "$module" ]] && continue
-        
-        # Skip excluded files
-        if should_exclude "$module"; then
+    echo -e "${WHITE}${BOLD}Comparing local and remote modules...${NC}\n"
+
+    for module_name in $remote_files; do
+        # Skip files in the exclusion list
+        if should_exclude "$module_name"; then
             continue
         fi
-        
-        local module_name=$(basename "$module")
-        
+
         echo -e "${BLUE}▸${NC} ${WHITE}$module_name${NC}"
-        
-        # Fetch remote file
+        local local_path="$MODULES_DIR/$module_name"
         local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
         local temp_file="/tmp/${module_name}.tmp"
-        
-        # Download to temp file to ensure consistent comparison
-        if ! curl -s "$remote_url" -o "$temp_file" 2>/dev/null; then
-            echo -e "  Status: ${GRAY}○ Local only (not in repo)${NC}\n"
-            rm -f "$temp_file"
-            continue
-        fi
-        
-        # Check if download is valid (not 404 page)
-        if [[ ! -s "$temp_file" ]] || grep -q "404: Not Found" "$temp_file" 2>/dev/null; then
-            echo -e "  Status: ${GRAY}○ Local only (not in repo)${NC}\n"
-            rm -f "$temp_file"
-            continue
-        fi
-        
-        # Calculate hashes from actual files (not from strings)
-        local local_hash=$(sha256sum "$module" | cut -d' ' -f1)
-        local remote_hash=$(sha256sum "$temp_file" | cut -d' ' -f1)
-        
-        echo -e "  Local hash:  ${YELLOW}${local_hash:0:10}...${NC}"
-        echo -e "  Remote hash: ${YELLOW}${remote_hash:0:10}...${NC}"
-        
-        if [[ "$local_hash" != "$remote_hash" ]]; then
-            # Do a secondary check - compare actual content after normalizing
-            # This handles line ending differences
-            local local_content=$(cat "$module" | tr -d '\r' | sed 's/[[:space:]]*$//')
-            local remote_content=$(cat "$temp_file" | tr -d '\r' | sed 's/[[:space:]]*$//')
+
+        # Check if the module exists locally
+        if [[ -f "$local_path" ]]; then
+            # File exists, check for updates
+            if ! curl -s "$remote_url" -o "$temp_file" 2>/dev/null || [[ ! -s "$temp_file" ]] || grep -q "404: Not Found" "$temp_file" 2>/dev/null; then
+                echo -e "  Status: ${GRAY}○ Local only (could not fetch remote version)${NC}\n"
+                rm -f "$temp_file"
+                continue
+            fi
             
-            if [[ "$local_content" != "$remote_content" ]]; then
+            local local_hash=$(sha256sum "$local_path" | awk '{print $1}')
+            local remote_hash=$(sha256sum "$temp_file" | awk '{print $1}')
+            
+            if [[ "$local_hash" != "$remote_hash" ]]; then
                 echo -e "  Status: ${ORANGE}⚡ Update available${NC}\n"
                 modules_to_update+=("$module_name")
                 ((updates_available++))
             else
-                echo -e "  Status: ${GREEN}✓ Up to date${NC} (only whitespace differences)\n"
+                echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
             fi
+            rm -f "$temp_file"
         else
-            echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
-        fi
-        
-        rm -f "$temp_file"
-    done
-    
-    # Check for new modules on remote
-    echo -e "${WHITE}${BOLD}Checking for new modules...${NC}\n"
-    
-    # Get list of .sh files from GitHub repo
-    local api_url="https://api.github.com/repos/$GITHUB_REPO/contents"
-    local remote_files=$(curl -s "$api_url" | grep -o '"name":"[^"]*\.sh"' | cut -d'"' -f4)
-    
-    for remote_file in $remote_files; do
-        # Skip excluded files even if they exist on remote
-        if should_exclude "$remote_file"; then
-            continue
-        fi
-        
-        if [[ ! -f "$MODULES_DIR/$remote_file" ]]; then
-            echo -e "${GREEN}▸ New module found: ${WHITE}$remote_file${NC}"
-            modules_to_update+=("$remote_file")
+            # File does not exist locally, it's a new module
+            echo -e "  Status: ${GREEN}✨ New module found${NC}\n"
+            modules_to_update+=("$module_name")
             ((updates_available++))
         fi
     done
