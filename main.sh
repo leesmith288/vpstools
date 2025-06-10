@@ -593,31 +593,31 @@ show_main_menu() {
         # Core Tools section
         print_section "CORE TOOLS"
         
-        echo -e "${WHITE}${BOLD}[1]${NC} ${GREEN}📦 System Tools${NC} ${WHITE}(系统工具 时区 swap 软件卸载)${NC}"
+        echo -e "${WHITE}${BOLD}[1]${NC} ${GREEN}📦 System Tools${NC} ${WHITE}系统工具 时区 swap 软件卸载${NC}"
         echo
 
-        echo -e "${WHITE}${BOLD}[2]${NC} ${GREEN}🔄 System Update${NC} ${WHITE}(系统升级 系统清理)${NC}"
+        echo -e "${WHITE}${BOLD}[2]${NC} ${GREEN}🔄 System Update${NC} ${WHITE}系统升级 系统清理${NC}"
         echo
 
-        echo -e "${WHITE}${BOLD}[3]${NC} ${GREEN}🔒 Security Check${NC} ${WHITE}(安全检查)${NC}"
+        echo -e "${WHITE}${BOLD}[3]${NC} ${GREEN}🔒 Security Check${NC} ${WHITE}安全检查${NC}"
         echo
         
         # Service Management section
         print_section "SERVICE MANAGEMENT"
         
-        echo -e "${WHITE}${BOLD}[4]${NC} ${BLUE}🐳 Docker Manager${NC} ${WHITE}(Docker管理)${NC}"
+        echo -e "${WHITE}${BOLD}[4]${NC} ${BLUE}🐳 Docker Manager${NC} ${WHITE}Docker管理${NC}"
         echo
 
-        echo -e "${WHITE}${BOLD}[5]${NC} ${BLUE}🌐 Caddy Manager${NC} ${WHITE}(Caddy相关)${NC}"
+        echo -e "${WHITE}${BOLD}[5]${NC} ${BLUE}🌐 Caddy Manager${NC} ${WHITE}Caddy相关${NC}"
         echo
 
-        echo -e "${WHITE}${BOLD}[6]${NC} ${BLUE}🚀 Xray Manager${NC} ${WHITE}(Xray相关)${NC}"
+        echo -e "${WHITE}${BOLD}[6]${NC} ${BLUE}🚀 Xray Manager${NC} ${WHITE}Xray相关${NC}"
         echo
         
         # Network & Security section
         print_section "NETWORK & SECURITY"
         
-        echo -e "${WHITE}${BOLD}[7]${NC} ${YELLOW}🌐 Network Tools${NC} ${WHITE}(网络工具)${NC}"
+        echo -e "${WHITE}${BOLD}[7]${NC} ${YELLOW}🌐 Network Tools${NC} ${WHITE}网络工具${NC}"
         echo
         
         # Enhanced Features
