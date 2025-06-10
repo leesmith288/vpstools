@@ -306,21 +306,15 @@ show_quick_actions() {
 }
 
 
-# Enhanced check_module_updates with proper hash comparison
+# Enhanced check_module_updates with proper hash comparison and jq
 check_module_updates() {
     clear
     print_header "🔄 CHECK FOR UPDATES"
-    
-    # Define files to exclude from update checks
+
     local EXCLUDE_FILES=(
-        "config.sh"
-        "backup.sh"
-        "temp.sh"
-        "test.sh"
-        "local-settings.sh"
+        "config.sh" "backup.sh" "temp.sh" "test.sh" "local-settings.sh" "installer.sh"
     )
-    
-    # Function to check if file should be excluded
+
     should_exclude() {
         local file="$1"
         for excluded in "${EXCLUDE_FILES[@]}"; do
@@ -328,69 +322,73 @@ check_module_updates() {
         done
         return 1
     }
-    
-    # Check if repo is configured
+
     if [[ "$GITHUB_REPO" == "your-username/your-repo" ]]; then
         print_error "GitHub repository not configured!"
-        echo -e "\n${YELLOW}Please configure in Settings menu${NC}"
-        echo -e "\nPress Enter to continue..."
-        read
+        print_info "Please configure it in the Settings menu."
+        read -p "Press Enter to continue..."
         return
     fi
-    
+
+    # --- JQ DEPENDENCY CHECK & PATH FINDER ---
+    local JQ_PATH=$(which jq)
+    if [[ -z "$JQ_PATH" ]]; then
+        print_error "Dependency 'jq' is not installed."
+        print_info "jq is required to reliably check for updates from GitHub."
+        echo -e "\nPlease install it using your package manager:"
+        echo -e "  ${YELLOW}sudo apt update && sudo apt install jq${NC} (for Debian/Ubuntu)"
+        echo -e "  ${YELLOW}sudo yum install jq${NC} (for CentOS/RHEL)"
+        read -p "Press Enter to return to the menu..."
+        return
+    fi
+    # --- END JQ CHECK ---
+
     print_info "Checking updates from: $GITHUB_REPO"
-    echo
-    
-    # Test connection to GitHub
-    if ! curl -s "https://api.github.com/repos/$GITHUB_REPO" >/dev/null; then
-        print_error "Cannot connect to GitHub repository: $GITHUB_REPO"
-        echo -e "\n${YELLOW}Please check your internet connection and repository settings${NC}"
-        echo -e "\nPress Enter to continue..."
-        read
-        return
-    fi
     
     local updates_available=0
     local modules_to_update=()
 
-    # Get the definitive list of .sh files from the GitHub repo
     print_info "Fetching file list from GitHub repository..."
-    local api_url="https://api.github.com/repos/$GITHUB_REPO/contents"
-    local remote_files=$(curl -s "$api_url" | grep -o '"name":"[^"]*\.sh"' | cut -d'"' -f4)
+    local api_url="https://api.github.com/repos/$GITHUB_REPO/contents/"
+    
+    # Use the full path to jq for maximum reliability
+    local remote_files=$("$JQ_PATH" -r '.[] | select(.name | endswith(".sh")) | .name' < <(curl -sL "$api_url"))
 
     if [[ -z "$remote_files" ]]; then
-        print_error "Could not fetch file list from GitHub."
-        echo -e "${YELLOW}Please check your repository name and internet connection.${NC}"
-        echo -e "\nPress Enter to continue..."
-        read
+        print_error "Could not fetch or parse file list from GitHub."
+        print_warning "Please check your repository name ('$GITHUB_REPO') and internet connection."
+        read -p "Press Enter to continue..."
         return
     fi
     
-    echo -e "${WHITE}${BOLD}Comparing local and remote modules...${NC}\n"
+    echo -e "\n${WHITE}${BOLD}Comparing local and remote modules...${NC}\n"
 
     for module_name in $remote_files; do
-        # Skip files in the exclusion list
         if should_exclude "$module_name"; then
             continue
         fi
 
         echo -e "${BLUE}▸${NC} ${WHITE}$module_name${NC}"
         local local_path="$MODULES_DIR/$module_name"
-        local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
-        local temp_file="/tmp/${module_name}.tmp"
-
-        # Check if the module exists locally
-        if [[ -f "$local_path" ]]; then
-            # File exists, check for updates
-            if ! curl -s "$remote_url" -o "$temp_file" 2>/dev/null || [[ ! -s "$temp_file" ]] || grep -q "404: Not Found" "$temp_file" 2>/dev/null; then
-                echo -e "  Status: ${GRAY}○ Local only (could not fetch remote version)${NC}\n"
-                rm -f "$temp_file"
-                continue
-            fi
+        
+        if [[ -f "$local_path" ]];
+        then
+            # File exists, check for updates by comparing hashes
+            local remote_url="https://raw.githubusercontent.com/$GITHUB_REPO/main/$module_name"
+            local temp_file="/tmp/${module_name}.tmp"
             
+            curl -sL "$remote_url" -o "$temp_file"
+            
+            if [[ ! -s "$temp_file" ]] || grep -q "404: Not Found" "$temp_file"; then
+                 echo -e "  Status: ${RED}✗ Error fetching remote file${NC}\n"
+                 rm -f "$temp_file"
+                 continue
+            fi
+
             local local_hash=$(sha256sum "$local_path" | awk '{print $1}')
             local remote_hash=$(sha256sum "$temp_file" | awk '{print $1}')
-            
+            rm -f "$temp_file"
+
             if [[ "$local_hash" != "$remote_hash" ]]; then
                 echo -e "  Status: ${ORANGE}⚡ Update available${NC}\n"
                 modules_to_update+=("$module_name")
@@ -398,7 +396,6 @@ check_module_updates() {
             else
                 echo -e "  Status: ${GREEN}✓ Up to date${NC}\n"
             fi
-            rm -f "$temp_file"
         else
             # File does not exist locally, it's a new module
             echo -e "  Status: ${GREEN}✨ New module found${NC}\n"
@@ -406,16 +403,16 @@ check_module_updates() {
             ((updates_available++))
         fi
     done
-    
+
+    # This part remains the same as your original script
     if [[ $updates_available -gt 0 ]]; then
         echo -e "\n${WHITE}${BOLD}$updates_available update(s) available!${NC}"
-        echo -e "\nModules to update:"
+        echo -e "\nModules to update/install:"
         for module in "${modules_to_update[@]}"; do
             echo -e "  ${BLUE}▸${NC} $module"
         done
         
-        echo -e "\n${WHITE}${BOLD}[U]${NC} Update all modules"
-        echo -e "${WHITE}${BOLD}[S]${NC} Select modules to update"
+        echo -e "\n${WHITE}${BOLD}[U]${NC} Update all"
         echo -e "${WHITE}${BOLD}[M]${NC} Return to main menu\n"
         read -p "Your choice: " update_choice
         
@@ -423,14 +420,10 @@ check_module_updates() {
             [Uu])
                 update_all_modules "${modules_to_update[@]}"
                 ;;
-            [Ss])
-                select_modules_to_update "${modules_to_update[@]}"
-                ;;
         esac
     else
-        echo -e "\n${GREEN}${BOLD}All modules are up to date!${NC}"
-        echo -e "\nPress Enter to return..."
-        read
+        print_success "All modules are up to date!"
+        read -p "Press Enter to return..."
     fi
 }
 
