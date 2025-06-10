@@ -583,7 +583,7 @@ show_main_menu() {
         # Large, clear header
         echo -e "\n${PURPLE}${BOLD}╔═══════════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}${BOLD}║                                                                       ║${NC}"
-        echo -e "${PURPLE}${BOLD}║${WHITE}${BOLD}              🚀  VPS MANAGEMENT SUITE v2.0  🚀${PURPLE}${BOLD}                ║${NC}"
+        echo -e "${PURPLE}${BOLD}║${WHITE}${BOLD}              🚀  VPS MANAGEMENT SUITE v3.0  🚀${PURPLE}${BOLD}                ║${NC}"
         echo -e "${PURPLE}${BOLD}║                                                                       ║${NC}"
         echo -e "${PURPLE}${BOLD}╚═══════════════════════════════════════════════════════════════════════╝${NC}"
         
@@ -594,39 +594,39 @@ show_main_menu() {
         print_section "CORE TOOLS"
         
         echo -e "${WHITE}${BOLD}[1]${NC} ${GREEN}📦 System Tools${NC}"
-        echo -e "     Package management, timezone, swap\n"
+        echo -e "     系统工具 时区 swap 软件卸载\n"
         
         echo -e "${WHITE}${BOLD}[2]${NC} ${GREEN}🔄 System Update${NC}"
-        echo -e "     Update system and installed tools\n"
+        echo -e "     系统升级 系统清理\n"
         
         echo -e "${WHITE}${BOLD}[3]${NC} ${GREEN}🔒 Security Check${NC}"
-        echo -e "     Audit system security\n"
+        echo -e "     安全检查\n"
         
         # Service Management section
         print_section "SERVICE MANAGEMENT"
         
         echo -e "${WHITE}${BOLD}[4]${NC} ${BLUE}🐳 Docker Manager${NC}"
-        echo -e "     Manage Docker and containers\n"
+        echo -e "     Docker管理\n"
         
         echo -e "${WHITE}${BOLD}[5]${NC} ${BLUE}🌐 Caddy Manager${NC}"
-        echo -e "     Web server management\n"
+        echo -e "     Caddy相关\n"
         
         echo -e "${WHITE}${BOLD}[6]${NC} ${BLUE}🚀 Xray Manager${NC}"
-        echo -e "     VPN and proxy management\n"
+        echo -e "     Xray相关\n"
         
         # Network & Security section
         print_section "NETWORK & SECURITY"
         
         echo -e "${WHITE}${BOLD}[7]${NC} ${YELLOW}🌐 Network Tools${NC}"
-        echo -e "     Firewall, ports, diagnostics\n"
+        echo -e "     网络工具\n"
         
         # Enhanced Features
         print_section "ENHANCED FEATURES"
         
-        echo -e "${WHITE}${BOLD}[D]${NC} ${PURPLE}📊 Dashboard${NC} - Detailed system overview"
-        echo -e "${WHITE}${BOLD}[Q]${NC} ${PURPLE}⚡ Quick Actions${NC} - Frequently used commands"
-        echo -e "${WHITE}${BOLD}[F]${NC} ${PURPLE}🔍 Find/Search${NC} - Search all functions"
-        echo -e "${WHITE}${BOLD}[U]${NC} ${PURPLE}🔄 Check Updates${NC} - Check for module updates\n"
+        echo -e "${WHITE}${BOLD}[D]${NC} ${PURPLE}📊 Dashboard${NC} - 系统详细信息"
+        echo -e "${WHITE}${BOLD}[Q]${NC} ${PURPLE}⚡ Quick Actions${NC} - 常用命令"
+        echo -e "${WHITE}${BOLD}[F]${NC} ${PURPLE}🔍 Find/Search${NC} - 搜索"
+        echo -e "${WHITE}${BOLD}[U]${NC} ${PURPLE}🔄 Check Updates${NC} - 脚本升级\n"
         
         # Bottom menu
         echo -e "${WHITE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
