@@ -1,5 +1,5 @@
 #!/bin/bash
-# System Update & Cleanup - Part of VPS Tools Suite
+# System Update & Cleanup 系统升级 清理
 # Host as: system-update.sh
 
 # Colors
