@@ -12,17 +12,22 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-# Function to check if Caddy is held
-check_caddy_hold() {
+# Function to check and ensure Caddy is held
+ensure_caddy_held() {
     if apt-mark showhold | grep -q "^caddy$"; then
         echo -e "${GREEN}✓ Caddy package is held - Protected from system updates${NC}"
         echo -e "${DIM}  Your custom Caddy with Cloudflare plugin will survive reboots and updates${NC}"
         return 0
     else
-        echo -e "${YELLOW}⚠️  Caddy package is NOT held${NC}"
-        echo -e "${DIM}  System updates may overwrite your custom Caddy binary${NC}"
-        echo -e "${CYAN}  Recommendation: Hold the package with 'sudo apt-mark hold caddy'${NC}"
-        return 1
+        echo -e "${YELLOW}⚠️  Caddy package is NOT held - Holding it now...${NC}"
+        if sudo apt-mark hold caddy 2>/dev/null; then
+            echo -e "${GREEN}✓ Successfully held Caddy package${NC}"
+            echo -e "${DIM}  Your custom Caddy is now protected from system updates${NC}"
+        else
+            echo -e "${YELLOW}Note: Could not hold package (might not be installed via apt)${NC}"
+        fi
+        sleep 2
+        return 0
     fi
 }
 
@@ -53,6 +58,14 @@ update_caddy_cloudflare() {
         return 0
     fi
     
+    # Check if package is held and temporarily unhold it
+    WAS_HELD=false
+    if apt-mark showhold | grep -q "^caddy$"; then
+        WAS_HELD=true
+        echo -e "${CYAN}Temporarily unholding Caddy package for update...${NC}"
+        sudo apt-mark unhold caddy
+    fi
+    
     # Create temp directory
     TMP_DIR=$(mktemp -d)
     cd "$TMP_DIR"
@@ -74,6 +87,7 @@ update_caddy_cloudflare() {
             if [ -f /usr/bin/caddy ]; then
                 echo -e "${CYAN}Backing up current Caddy...${NC}"
                 sudo cp /usr/bin/caddy /usr/bin/caddy.backup.$(date +%Y%m%d_%H%M%S)
+                echo -e "${DIM}  Backup saved to: /usr/bin/caddy.backup.$(date +%Y%m%d_%H%M%S)${NC}"
             fi
             
             # Stop Caddy
@@ -93,21 +107,37 @@ update_caddy_cloudflare() {
                 echo -e "\n${CYAN}New Caddy version:${NC}"
                 caddy version
                 
-                # Check if package is held
-                if ! apt-mark showhold | grep -q "^caddy$"; then
-                    echo -e "\n${YELLOW}Don't forget to hold the package to prevent apt from overwriting it:${NC}"
-                    echo -e "${CYAN}  sudo apt-mark hold caddy${NC}"
+                # Re-hold the package if it was held before
+                if [ "$WAS_HELD" = true ]; then
+                    echo -e "\n${CYAN}Re-holding Caddy package...${NC}"
+                    sudo apt-mark hold caddy
+                    echo -e "${GREEN}✓ Caddy package is held again${NC}"
                 fi
             else
                 echo -e "${RED}✗ Failed to start Caddy${NC}"
                 echo -e "${YELLOW}Check logs with: sudo journalctl -u caddy -n 50${NC}"
+                
+                # Still re-hold if it was held before
+                if [ "$WAS_HELD" = true ]; then
+                    sudo apt-mark hold caddy
+                fi
             fi
         else
             echo -e "${RED}✗ Downloaded binary doesn't have Cloudflare plugin${NC}"
             rm -f caddy
+            
+            # Re-hold if it was held before
+            if [ "$WAS_HELD" = true ]; then
+                sudo apt-mark hold caddy
+            fi
         fi
     else
         echo -e "${RED}✗ Failed to download Caddy${NC}"
+        
+        # Re-hold if it was held before
+        if [ "$WAS_HELD" = true ]; then
+            sudo apt-mark hold caddy
+        fi
     fi
     
     # Cleanup
@@ -119,6 +149,13 @@ update_caddy_cloudflare() {
 }
 
 caddy_menu() {
+    # First, ensure Caddy is held when starting the script
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${BOLD}           Checking Caddy Protection Status               ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    ensure_caddy_held
+    
     while true; do
         clear
         echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
@@ -132,9 +169,12 @@ caddy_menu() {
             echo -e "${RED}✗ Caddy Status: Not Running${NC}"
         fi
         
-        # Check if Caddy is held
-        echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        check_caddy_hold
+        # Show protection status
+        if apt-mark showhold | grep -q "^caddy$"; then
+            echo -e "${GREEN}✓ Update Protection: Enabled${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Update Protection: Disabled${NC}"
+        fi
         echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
         
         echo -e "${GREEN}${BOLD}Configuration:${NC}"
