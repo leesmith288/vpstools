@@ -664,7 +664,7 @@ show_main_menu() {
     print_color "$PURPLE$BOLD" "║                                                                    ║"
     print_color "$PURPLE$BOLD" "║                      🚀 VPS SYSTEM TOOLS 🚀                       ║"
     print_color "$PURPLE$BOLD" "║                                                                    ║"
-    print_color "$PURPLE$BOLD" "║                    Management Script v1.0                         ║"
+    print_color "$PURPLE$BOLD" "║                    Management Script v3.0                         ║"
     print_color "$PURPLE$BOLD" "║                 Debian 12 / Ubuntu 24.04                          ║"
     print_color "$PURPLE$BOLD" "║                                                                    ║"
     print_color "$PURPLE$BOLD" "╚════════════════════════════════════════════════════════════════════╝"
