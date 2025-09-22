@@ -2,7 +2,7 @@
 
 # VPS System Tools Management Script
 # Author: Automated Script Generator
-# Date: 2025-09-22
+# Date: 2025-06-08
 # Description: Comprehensive VPS management tool for Debian 12 and Ubuntu 24.04
 
 # Color definitions for myopia-friendly interface
@@ -651,30 +651,133 @@ install_caddy() {
     read -p "Press Enter to continue..."
 }
 
-# Function to show main menu
+# Function to show main menu with improved spacing for myopia users
 show_main_menu() {
     clear
-    print_color "$PURPLE$BOLD" "╔══════════════════════════════════════════════════════════════╗"
-    print_color "$PURPLE$BOLD" "║                    🚀 VPS SYSTEM TOOLS                      ║"
-    print_color "$PURPLE$BOLD" "║                 Management Script v1.0                      ║"
-    print_color "$PURPLE$BOLD" "║              Debian 12 / Ubuntu 24.04                       ║"
-    print_color "$PURPLE$BOLD" "╚══════════════════════════════════════════════════════════════╝"
+    
+    # Add extra line breaks for better spacing
+    echo
     echo
     
-    # Show system info
-    print_info "System: $OS $OS_VERSION | User: $(whoami) | Date: $(date '+%Y-%m-%d %H:%M')"
+    # Title box with extra padding
+    print_color "$PURPLE$BOLD" "╔════════════════════════════════════════════════════════════════════╗"
+    print_color "$PURPLE$BOLD" "║                                                                    ║"
+    print_color "$PURPLE$BOLD" "║                      🚀 VPS SYSTEM TOOLS 🚀                       ║"
+    print_color "$PURPLE$BOLD" "║                                                                    ║"
+    print_color "$PURPLE$BOLD" "║                    Management Script v1.0                         ║"
+    print_color "$PURPLE$BOLD" "║                 Debian 12 / Ubuntu 24.04                          ║"
+    print_color "$PURPLE$BOLD" "║                                                                    ║"
+    print_color "$PURPLE$BOLD" "╚════════════════════════════════════════════════════════════════════╝"
+    
+    echo
     echo
     
-    print_color "$WHITE$BOLD" "📋 MAIN MENU:"
+    # System info with better spacing
+    print_color "$WHITE" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_info "  System: $OS $OS_VERSION  |  User: $(whoami)  |  Date: $(date '+%Y-%m-%d %H:%M')"
+    print_color "$WHITE" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
     echo
-    print_color "$CYAN" "[1] 🌏 Set Timezone to Asia/Shanghai"
-    print_color "$CYAN" "[2] 💾 Setup Swap Memory"
-    print_color "$CYAN" "[3] 🐳 Install Docker"
-    print_color "$CYAN" "[4] 🌐 Install Caddy"
-    print_color "$CYAN" "[5] 📋 View System Information"
-    print_color "$CYAN" "[6] 📄 View Log File"
-    print_color "$CYAN" "[7] ❌ Exit"
     echo
+    
+    # Main menu title with extra spacing
+    print_color "$WHITE$BOLD" "                        📋  MAIN MENU  📋"
+    
+    echo
+    echo
+    
+    # Menu options with double line spacing
+    print_color "$CYAN$BOLD" "     [1]  🌏  Set Timezone to Asia/Shanghai"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [2]  💾  Setup Swap Memory"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [3]  🐳  Install Docker"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [4]  🌐  Install Caddy"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [5]  📋  View System Information"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [6]  📄  View Log File"
+    echo
+    
+    print_color "$CYAN$BOLD" "     [7]  ❌  Exit"
+    
+    echo
+    echo
+    print_color "$WHITE" "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# Alternative version with even larger visual presentation
+show_main_menu_large() {
+    clear
+    
+    # Use printf for consistent spacing
+    printf "\n\n\n"
+    
+    # Large title
+    print_color "$PURPLE$BOLD" "╔══════════════════════════════════════════════════════════════════════════════╗"
+    print_color "$PURPLE$BOLD" "║                                                                              ║"
+    print_color "$PURPLE$BOLD" "║                         🚀  VPS SYSTEM TOOLS  🚀                             ║"
+    print_color "$PURPLE$BOLD" "║                                                                              ║"
+    print_color "$PURPLE$BOLD" "║                         Management Script v1.0                              ║"
+    print_color "$PURPLE$BOLD" "║                                                                              ║"
+    print_color "$PURPLE$BOLD" "╚══════════════════════════════════════════════════════════════════════════════╝"
+    
+    printf "\n\n"
+    
+    # System info bar
+    print_color "$YELLOW$BOLD" "┌──────────────────────────────────────────────────────────────────────────────┐"
+    print_color "$YELLOW$BOLD" "│   System: $OS $OS_VERSION    User: $(whoami)    Date: $(date '+%Y-%m-%d %H:%M')   │"
+    print_color "$YELLOW$BOLD" "└──────────────────────────────────────────────────────────────────────────────┘"
+    
+    printf "\n\n\n"
+    
+    # Menu with large spacing
+    print_color "$WHITE$BOLD" "                           SELECT AN OPTION:"
+    printf "\n\n"
+    
+    # Each option on its own visual block
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [1]  🌏  Set Timezone to Asia/Shanghai    │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [2]  💾  Setup Swap Memory                │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [3]  🐳  Install Docker                   │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [4]  🌐  Install Caddy                    │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [5]  📋  View System Information          │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$CYAN$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$CYAN$BOLD" "        │  [6]  📄  View Log File                    │"
+    print_color "$CYAN$BOLD" "        └─────────────────────────────────────────────┘"
+    printf "\n"
+    
+    print_color "$RED$BOLD" "        ┌─────────────────────────────────────────────┐"
+    print_color "$RED$BOLD" "        │  [7]  ❌  Exit                             │"
+    print_color "$RED$BOLD" "        └─────────────────────────────────────────────┘"
+    
+    printf "\n\n"
 }
 
 # Function to show system information
@@ -762,8 +865,10 @@ main() {
     
     # Main menu loop
     while true; do
-        show_main_menu
-        read -p "$(print_color $YELLOW "Choose an option [1-7]: ")" choice
+        # Use the improved menu display
+        show_main_menu  # Or use show_main_menu_large for even bigger display
+        
+        read -p "$(print_color $YELLOW "        Choose an option [1-7]: ")" choice
         
         case $choice in
             1)
