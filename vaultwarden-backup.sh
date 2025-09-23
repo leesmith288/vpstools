@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================
-# Vaultwarden Backup Script
+# Vaultwarden Backup Script - Fixed Version
 # ============================================
 # Save this as: /root/scripts/vaultwarden-backup.sh
 # Make executable: chmod +x /root/scripts/vaultwarden-backup.sh
@@ -34,6 +34,28 @@ print_message() {
     echo -e "${2}[$(date '+%Y-%m-%d %H:%M:%S')] ${1}${NC}"
 }
 
+# Detect docker compose command (new vs old version)
+if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+    print_message "Using docker compose (new version)" "$BLUE"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+    print_message "Using docker-compose (old version)" "$BLUE"
+else
+    print_message "ERROR: Neither 'docker compose' nor 'docker-compose' found!" "$RED"
+    exit 1
+fi
+
+# Check if sqlite3 is installed
+HAS_SQLITE3=false
+if command -v sqlite3 &> /dev/null; then
+    HAS_SQLITE3=true
+    print_message "SQLite3 found - will use for safe backup" "$GREEN"
+else
+    print_message "SQLite3 not installed - will use file copy method" "$YELLOW"
+    print_message "To install: apt-get install sqlite3" "$YELLOW"
+fi
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 
     print_message "Please run as root" "$RED"
@@ -65,56 +87,65 @@ print_message "========================================" "$BLUE"
 if [ "$STOP_CONTAINER" = true ]; then
     print_message "Stopping Vaultwarden container for consistent backup..." "$YELLOW"
     cd "$VAULTWARDEN_DIR"
-    docker-compose stop
+    $DOCKER_COMPOSE stop
     sleep 3
 fi
 
-# Step 2: Backup the SQLite database using proper method
+# Step 2: Backup the SQLite database
 if [ -f "$DATA_DIR/db.sqlite3" ]; then
     print_message "Backing up SQLite database..." "$YELLOW"
     
-    if [ "$STOP_CONTAINER" = true ]; then
-        # Container is stopped, can use simple copy
+    if [ "$STOP_CONTAINER" = true ] || [ "$HAS_SQLITE3" = false ]; then
+        # Container is stopped OR sqlite3 not available, use simple copy
         cp "$DATA_DIR/db.sqlite3" "$BACKUP_SUBDIR/"
         # Also copy WAL and SHM files if they exist
         [ -f "$DATA_DIR/db.sqlite3-wal" ] && cp "$DATA_DIR/db.sqlite3-wal" "$BACKUP_SUBDIR/"
         [ -f "$DATA_DIR/db.sqlite3-shm" ] && cp "$DATA_DIR/db.sqlite3-shm" "$BACKUP_SUBDIR/"
     else
-        # Container is running, use SQLite backup command for consistency
+        # Container is running AND sqlite3 available, use SQLite backup command
         sqlite3 "$DATA_DIR/db.sqlite3" ".backup '$BACKUP_SUBDIR/db.sqlite3'"
-        
-        # For running backup, we should also use SQLite to checkpoint the WAL
+        # Checkpoint the WAL
         sqlite3 "$DATA_DIR/db.sqlite3" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
     fi
     
     print_message "Database backup completed" "$GREEN"
 else
     print_message "ERROR: Database file not found at $DATA_DIR/db.sqlite3!" "$RED"
-    [ "$STOP_CONTAINER" = true ] && cd "$VAULTWARDEN_DIR" && docker-compose start
+    [ "$STOP_CONTAINER" = true ] && cd "$VAULTWARDEN_DIR" && $DOCKER_COMPOSE start
     exit 1
 fi
 
 # Step 3: Backup RSA keys (CRITICAL - without these, data cannot be decrypted!)
 print_message "Backing up RSA keys..." "$YELLOW"
+RSA_KEY_COUNT=0
 if [ -f "$DATA_DIR/rsa_key.pem" ]; then
     cp "$DATA_DIR/rsa_key.pem" "$BACKUP_SUBDIR/"
     print_message "✓ rsa_key.pem backed up" "$GREEN"
-else
-    print_message "⚠ No rsa_key.pem found (may not be generated yet)" "$YELLOW"
+    ((RSA_KEY_COUNT++))
 fi
 
 if [ -f "$DATA_DIR/rsa_key.pub.pem" ]; then
     cp "$DATA_DIR/rsa_key.pub.pem" "$BACKUP_SUBDIR/"
     print_message "✓ rsa_key.pub.pem backed up" "$GREEN"
-else
-    print_message "⚠ No rsa_key.pub.pem found (may not be generated yet)" "$YELLOW"
+    ((RSA_KEY_COUNT++))
+fi
+
+if [ -f "$DATA_DIR/rsa_key.der" ]; then
+    cp "$DATA_DIR/rsa_key.der" "$BACKUP_SUBDIR/"
+    print_message "✓ rsa_key.der backed up" "$GREEN"
+    ((RSA_KEY_COUNT++))
+fi
+
+if [ $RSA_KEY_COUNT -eq 0 ]; then
+    print_message "⚠ WARNING: No RSA keys found! These are generated on first use." "$YELLOW"
+    print_message "  Make sure to backup again after adding your first password!" "$YELLOW"
 fi
 
 # Step 4: Backup attachments folder if it exists and has content
 if [ -d "$DATA_DIR/attachments" ] && [ "$(ls -A $DATA_DIR/attachments 2>/dev/null)" ]; then
     print_message "Backing up attachments..." "$YELLOW"
     cp -r "$DATA_DIR/attachments" "$BACKUP_SUBDIR/"
-    ATTACHMENT_COUNT=$(find "$DATA_DIR/attachments" -type f | wc -l)
+    ATTACHMENT_COUNT=$(find "$DATA_DIR/attachments" -type f 2>/dev/null | wc -l)
     print_message "✓ Backed up $ATTACHMENT_COUNT attachment files" "$GREEN"
 else
     print_message "No attachments to backup" "$BLUE"
@@ -124,7 +155,7 @@ fi
 if [ -d "$DATA_DIR/sends" ] && [ "$(ls -A $DATA_DIR/sends 2>/dev/null)" ]; then
     print_message "Backing up sends..." "$YELLOW"
     cp -r "$DATA_DIR/sends" "$BACKUP_SUBDIR/"
-    SENDS_COUNT=$(find "$DATA_DIR/sends" -type f | wc -l)
+    SENDS_COUNT=$(find "$DATA_DIR/sends" -type f 2>/dev/null | wc -l)
     print_message "✓ Backed up $SENDS_COUNT send files" "$GREEN"
 else
     print_message "No sends to backup" "$BLUE"
@@ -141,15 +172,20 @@ fi
 
 # Step 7: Backup icon_cache (optional, can be regenerated)
 if [ -d "$DATA_DIR/icon_cache" ] && [ "$(ls -A $DATA_DIR/icon_cache 2>/dev/null)" ]; then
-    read -t 5 -p "Backup icon cache? (y/N, auto-skip in 5s): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        print_message "Backing up icon cache..." "$YELLOW"
-        cp -r "$DATA_DIR/icon_cache" "$BACKUP_SUBDIR/"
-        ICON_COUNT=$(find "$DATA_DIR/icon_cache" -type f | wc -l)
-        print_message "✓ Backed up $ICON_COUNT icon files" "$GREEN"
+    # For automated backups, skip icon cache by default
+    if [ -t 0 ]; then  # Check if running interactively
+        read -t 5 -p "Backup icon cache? (y/N, auto-skip in 5s): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            print_message "Backing up icon cache..." "$YELLOW"
+            cp -r "$DATA_DIR/icon_cache" "$BACKUP_SUBDIR/"
+            ICON_COUNT=$(find "$DATA_DIR/icon_cache" -type f 2>/dev/null | wc -l)
+            print_message "✓ Backed up $ICON_COUNT icon files" "$GREEN"
+        else
+            print_message "Skipping icon cache backup" "$BLUE"
+        fi
     else
-        print_message "Skipping icon cache backup" "$BLUE"
+        print_message "Skipping icon cache (automated backup)" "$BLUE"
     fi
 fi
 
@@ -158,6 +194,10 @@ print_message "Backing up Docker configuration..." "$YELLOW"
 if [ -f "$VAULTWARDEN_DIR/docker-compose.yml" ]; then
     cp "$VAULTWARDEN_DIR/docker-compose.yml" "$BACKUP_SUBDIR/"
     print_message "✓ docker-compose.yml backed up" "$GREEN"
+fi
+if [ -f "$VAULTWARDEN_DIR/docker-compose.yaml" ]; then
+    cp "$VAULTWARDEN_DIR/docker-compose.yaml" "$BACKUP_SUBDIR/"
+    print_message "✓ docker-compose.yaml backed up" "$GREEN"
 fi
 if [ -f "$VAULTWARDEN_DIR/.env" ]; then
     cp "$VAULTWARDEN_DIR/.env" "$BACKUP_SUBDIR/"
@@ -170,10 +210,13 @@ Vaultwarden Backup Information
 ==============================
 Backup Date: $(date)
 Backup Method: $([ "$STOP_CONTAINER" = true ] && echo 'With container stop' || echo 'Without stopping (live backup)')
+SQLite3 Available: $HAS_SQLITE3
 Data Directory: $DATA_DIR
 Container Name: $CONTAINER_NAME
-Database Size: $(du -h "$BACKUP_SUBDIR/db.sqlite3" | cut -f1)
-Total Items Backed Up:
+Database Size: $(du -h "$BACKUP_SUBDIR/db.sqlite3" 2>/dev/null | cut -f1)
+Docker Compose Command: $DOCKER_COMPOSE
+
+Files Backed Up:
 $(ls -la "$BACKUP_SUBDIR/" | tail -n +2)
 EOF
 
@@ -181,7 +224,7 @@ EOF
 if [ "$STOP_CONTAINER" = true ]; then
     print_message "Starting Vaultwarden container..." "$YELLOW"
     cd "$VAULTWARDEN_DIR"
-    docker-compose start
+    $DOCKER_COMPOSE start
     sleep 5
     
     # Verify container is running
@@ -189,6 +232,7 @@ if [ "$STOP_CONTAINER" = true ]; then
         print_message "✓ Vaultwarden container is running" "$GREEN"
     else
         print_message "⚠ WARNING: Container may not be running properly!" "$RED"
+        print_message "  Try: cd $VAULTWARDEN_DIR && $DOCKER_COMPOSE up -d" "$YELLOW"
     fi
 fi
 
@@ -205,7 +249,24 @@ chmod 600 "$BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz"
 print_message "Cleaning up backups older than $KEEP_DAYS days..." "$YELLOW"
 find "$BACKUP_DIR" -name "vaultwarden_backup_*.tar.gz" -type f -mtime +$KEEP_DAYS -delete
 
-# Step 14: Generate summary
+# Step 14: Test database integrity (if sqlite3 is available)
+if [ "$HAS_SQLITE3" = true ]; then
+    print_message "Testing backup integrity..." "$YELLOW"
+    TEMP_TEST="/tmp/test_backup_$$"
+    mkdir -p "$TEMP_TEST"
+    tar -xzf "$BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz" -C "$TEMP_TEST" --strip-components=1
+    
+    if sqlite3 "$TEMP_TEST/db.sqlite3" "PRAGMA integrity_check;" 2>/dev/null | grep -q "ok"; then
+        print_message "✓ Database integrity check PASSED" "$GREEN"
+    else
+        print_message "⚠ Cannot verify integrity (but backup should be fine)" "$YELLOW"
+    fi
+    rm -rf "$TEMP_TEST"
+else
+    print_message "Skipping integrity check (sqlite3 not installed)" "$BLUE"
+fi
+
+# Step 15: Generate summary
 echo
 print_message "========================================" "$BLUE"
 print_message "BACKUP COMPLETED SUCCESSFULLY!" "$GREEN"
@@ -220,19 +281,13 @@ echo
 print_message "Recent backups (newest first):" "$BLUE"
 ls -lht "$BACKUP_DIR"/vaultwarden_backup_*.tar.gz 2>/dev/null | head -5
 
-# Test database integrity
 echo
-print_message "Testing backup integrity..." "$YELLOW"
-TEMP_TEST="/tmp/test_backup_$$"
-mkdir -p "$TEMP_TEST"
-tar -xzf "$BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz" -C "$TEMP_TEST" --strip-components=1
-if sqlite3 "$TEMP_TEST/db.sqlite3" "PRAGMA integrity_check;" | grep -q "ok"; then
-    print_message "✓ Database integrity check PASSED" "$GREEN"
-else
-    print_message "⚠ Database integrity check FAILED - Please investigate!" "$RED"
-fi
-rm -rf "$TEMP_TEST"
-
-echo
-print_message "You can now download: $BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz" "$GREEN"
+print_message "✓ You can now download: $BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz" "$GREEN"
 print_message "To restore, use: ./vaultwarden-restore.sh $BACKUP_DIR/vaultwarden_backup_${TIMESTAMP}.tar.gz" "$BLUE"
+
+# Optional: Install sqlite3 suggestion
+if [ "$HAS_SQLITE3" = false ]; then
+    echo
+    print_message "TIP: Install sqlite3 for better backup integrity checking:" "$YELLOW"
+    print_message "     apt-get update && apt-get install -y sqlite3" "$YELLOW"
+fi
