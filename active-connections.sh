@@ -1,6 +1,6 @@
 #!/bin/bash
-# Active Connections Monitor - Fixed Version
-# Shows all network connections immediately with proper alignment
+# Active Connections Monitor - Corrected Version
+# Shows all network connections immediately with netstat format
 # Part of VPS Security Tools Suite
 # Host as: active-connections.sh
 
@@ -240,46 +240,47 @@ main_display() {
         done
     fi
     
-    # Full Network Statistics (netstat style)
+    # Full Network Statistics - ACTUAL NETSTAT OUTPUT
     print_section "FULL NETWORK STATISTICS"
     
-    echo -e "${WHITE}${BOLD}  Proto  Local Address          Foreign Address         State       PID/Program${NC}"
-    echo -e "${DIM}  ──────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${WHITE}${BOLD}Active Internet connections (servers and established)${NC}"
+    echo -e "${WHITE}${BOLD}Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name${NC}"
+    echo -e "${DIM}──────────────────────────────────────────────────────────────────────────────────────────────${NC}"
     
-    # Use ss with more details
-    ss -tupn | grep -v "State" | head -30 | while IFS= read -r line; do
-        # Parse the line
-        proto=$(echo "$line" | awk '{print $1}')
-        state=$(echo "$line" | awk '{print $2}')
-        recv_q=$(echo "$line" | awk '{print $3}')
-        send_q=$(echo "$line" | awk '{print $4}')
-        local_addr=$(echo "$line" | awk '{print $5}')
-        foreign_addr=$(echo "$line" | awk '{print $6}')
-        process=$(echo "$line" | awk '{for(i=7;i<=NF;i++) printf "%s ", $i}')
-        
-        # Color based on state
-        if [[ "$state" == "LISTEN" ]]; then
-            color="${BLUE}"
-        elif [[ "$state" == "ESTAB" ]]; then
-            color="${GREEN}"
-        elif [[ "$state" == "TIME-WAIT" ]]; then
-            color="${YELLOW}"
-        else
-            color="${WHITE}"
-        fi
-        
-        # Format and print
-        printf "${color}  %-6s %-23s %-23s %-11s %s${NC}\n" \
-            "$proto" "$local_addr" "$foreign_addr" "$state" "${process:0:20}"
-    done
-    
-    # Show if there are more connections
-    total_lines=$(ss -tupn | wc -l)
-    if [ $total_lines -gt 30 ]; then
-        echo -e "${DIM}  ... and $((total_lines - 30)) more connections${NC}"
+    # Use actual netstat command (or ss with netstat-like format if netstat not available)
+    if command -v netstat &> /dev/null; then
+        netstat -tunapl 2>/dev/null | grep -v "Active Internet" | grep -v "Proto Recv-Q" | head -40 | while IFS= read -r line; do
+            # Color based on state
+            if echo "$line" | grep -q "LISTEN"; then
+                echo -e "${BLUE}${line}${NC}"
+            elif echo "$line" | grep -q "ESTABLISHED"; then
+                echo -e "${GREEN}${line}${NC}"
+            elif echo "$line" | grep -q "TIME_WAIT"; then
+                echo -e "${YELLOW}${line}${NC}"
+            else
+                echo -e "${WHITE}${line}${NC}"
+            fi
+        done
+    else
+        # Fallback to ss if netstat not available
+        echo -e "${YELLOW}  Note: netstat not installed, using ss output${NC}"
+        ss -tunapl 2>/dev/null | head -40 | while IFS= read -r line; do
+            echo -e "${WHITE}${line}${NC}"
+        done
     fi
     
-    # Established Connections with GeoIP - FIXED ALIGNMENT
+    # Show if there are more connections
+    if command -v netstat &> /dev/null; then
+        total_lines=$(netstat -tuna | wc -l)
+    else
+        total_lines=$(ss -tuna | wc -l)
+    fi
+    
+    if [ $total_lines -gt 40 ]; then
+        echo -e "${DIM}  ... and $((total_lines - 40)) more connections${NC}"
+    fi
+    
+    # Established Connections with GeoIP
     print_section "ESTABLISHED CONNECTIONS WITH LOCATION"
     
     echo -e "${WHITE}${BOLD}  Local Address          Foreign Address         Location${NC}"
@@ -411,52 +412,6 @@ main_display() {
     fi
     rm -f "$temp_file"
     
-    # Recent Failed Connections
-    print_section "RECENT FAILED SSH ATTEMPTS"
-    
-    if [ -f /var/log/auth.log ]; then
-        failed_attempts=$(grep "Failed password" /var/log/auth.log 2>/dev/null | tail -5)
-        if [ -n "$failed_attempts" ]; then
-            echo "$failed_attempts" | while read line; do
-                # Extract IP
-                ip=$(echo "$line" | grep -oE "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}")
-                if [ -n "$ip" ]; then
-                    location=$(get_ip_location "$ip")
-                    timestamp=$(echo "$line" | awk '{print $1, $2, $3}')
-                    printf "${RED}  %-20s %-18s %s${NC}\n" "$timestamp" "$ip" "($location)"
-                fi
-            done
-        else
-            echo -e "${GREEN}  ${CHECK} No recent failed attempts${NC}"
-        fi
-    fi
-    
-    # Currently Blocked IPs
-    print_section "CURRENTLY BLOCKED IPS"
-    
-    blocked_count=0
-    
-    # Check fail2ban
-    if command -v fail2ban-client &> /dev/null; then
-        jails=$(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*:\s*//' | tr ',' ' ')
-        
-        for jail in $jails; do
-            banned_ips=$(fail2ban-client status $jail 2>/dev/null | grep -A 100 "Banned IP list:" | grep -oE "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}")
-            if [ -n "$banned_ips" ]; then
-                echo -e "${YELLOW}  Jail: ${jail}${NC}"
-                echo "$banned_ips" | while read ip; do
-                    location=$(get_ip_location "$ip")
-                    printf "${RED}    %-18s %s${NC}\n" "$ip" "($location)"
-                    blocked_count=$((blocked_count + 1))
-                done
-            fi
-        done
-    fi
-    
-    if [ $blocked_count -eq 0 ]; then
-        echo -e "${DIM}  No IPs currently blocked${NC}"
-    fi
-    
     # Security Summary
     echo ""
     echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
@@ -522,7 +477,11 @@ export_report() {
         who -u
         echo ""
         echo "NETWORK STATISTICS:"
-        ss -tupn
+        if command -v netstat &> /dev/null; then
+            netstat -tunapl
+        else
+            ss -tunapl
+        fi
         echo ""
         echo "ESTABLISHED CONNECTIONS:"
         ss -tn state established
@@ -532,9 +491,6 @@ export_report() {
         echo ""
         echo "CONNECTION SUMMARY:"
         ss -s
-        echo ""
-        echo "RECENT AUTH FAILURES:"
-        grep "Failed password" /var/log/auth.log 2>/dev/null | tail -20
     } > "$filename"
     
     echo -e "${GREEN}${CHECK} Report saved to: ${WHITE}${filename}${NC}"
