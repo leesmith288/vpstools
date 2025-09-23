@@ -1,5 +1,6 @@
 #!/bin/bash
-# Process Check Script - Enhanced for Myopia Users
+# Process Check Script - Direct Display Version
+# Shows all information immediately, then offers actions
 # Part of VPS Security Tools Suite
 # Host as: process-check.sh
 
@@ -12,7 +13,6 @@ CYAN='\033[1;96m'      # Bright Cyan
 MAGENTA='\033[1;95m'   # Bright Magenta
 WHITE='\033[1;97m'     # Bright White
 ORANGE='\033[38;5;208m' # Orange
-PURPLE='\033[38;5;135m' # Purple
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'           # No Color
@@ -27,470 +27,412 @@ WARNING="⚠"
 INFO="ℹ"
 ARROW="→"
 BULLET="●"
-STAR="★"
 
-# Function to print section headers
-print_header() {
+# Function to print section headers with better visibility
+print_section() {
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${WHITE}  $1${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}${BOLD}  $1${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
     echo ""
 }
 
-# Function to print sub-headers
-print_subheader() {
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  ${STAR} $1${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-}
-
-# Function to display system overview
-show_system_overview() {
-    print_header "SYSTEM OVERVIEW"
+# Function to check for suspicious processes
+check_suspicious() {
+    local suspicious_found=0
+    local suspicious_patterns="xmrig|minergate|minerd|cpuminer|cryptonight|monero|kworkerds|kdevtmpfsi|kinsing|ddgs|qW3xT|2t3ik|dbused|xmr|crypto-pool|minexmr|pool.min"
     
-    # System Info
-    echo -e "${WHITE}${BOLD}System Information:${NC}"
-    echo -e "${BLUE}  ${BULLET} Hostname:${NC} ${GREEN}$(hostname)${NC}"
-    echo -e "${BLUE}  ${BULLET} Kernel:${NC} ${GREEN}$(uname -r)${NC}"
-    echo -e "${BLUE}  ${BULLET} Uptime:${NC} ${GREEN}$(uptime -p)${NC}"
-    echo ""
-    
-    # Resource Usage with color coding
-    echo -e "${WHITE}${BOLD}Resource Usage:${NC}"
-    
-    # CPU Usage
-    cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-    if (( $(echo "$cpu_usage > 80" | bc -l 2>/dev/null || echo 0) )); then
-        cpu_color="${RED}"
-        cpu_status="${CROSS}"
-    elif (( $(echo "$cpu_usage > 50" | bc -l 2>/dev/null || echo 0) )); then
-        cpu_color="${YELLOW}"
-        cpu_status="${WARNING}"
-    else
-        cpu_color="${GREEN}"
-        cpu_status="${CHECK}"
-    fi
-    echo -e "${BLUE}  ${BULLET} CPU Usage:${NC} ${cpu_color}${cpu_usage}% ${cpu_status}${NC}"
-    
-    # Memory Usage
-    mem_info=$(free -h | grep "^Mem:")
-    mem_total=$(echo $mem_info | awk '{print $2}')
-    mem_used=$(echo $mem_info | awk '{print $3}')
-    mem_percent=$(free | grep "^Mem:" | awk '{printf("%.1f", $3/$2 * 100)}')
-    
-    if (( $(echo "$mem_percent > 80" | bc -l 2>/dev/null || echo 0) )); then
-        mem_color="${RED}"
-        mem_status="${CROSS}"
-    elif (( $(echo "$mem_percent > 60" | bc -l 2>/dev/null || echo 0) )); then
-        mem_color="${YELLOW}"
-        mem_status="${WARNING}"
-    else
-        mem_color="${GREEN}"
-        mem_status="${CHECK}"
-    fi
-    echo -e "${BLUE}  ${BULLET} Memory:${NC} ${mem_color}${mem_used}/${mem_total} (${mem_percent}%) ${mem_status}${NC}"
-    
-    # Load Average
-    load_avg=$(uptime | awk -F'load average:' '{print $2}')
-    echo -e "${BLUE}  ${BULLET} Load Average:${NC} ${WHITE}${load_avg}${NC}"
-    
-    # Process Count
-    total_procs=$(ps aux | wc -l)
-    running_procs=$(ps r | wc -l)
-    echo -e "${BLUE}  ${BULLET} Processes:${NC} ${WHITE}${total_procs} total, ${running_procs} running${NC}"
-}
-
-# Function to show top processes
-show_top_processes() {
-    print_subheader "TOP CPU CONSUMERS"
-    
-    echo -e "${WHITE}${BOLD}  PID    USER      CPU%   MEM%   COMMAND${NC}"
-    echo -e "${DIM}  ───────────────────────────────────────────────────────────${NC}"
-    
-    ps aux --sort=-%cpu | head -6 | tail -5 | while read user pid cpu mem vsz rss tty stat start time cmd; do
-        # Color code based on CPU usage
-        if (( $(echo "$cpu > 50" | bc -l 2>/dev/null || echo 0) )); then
-            color="${RED}"
-            indicator="${WARNING}"
-        elif (( $(echo "$cpu > 20" | bc -l 2>/dev/null || echo 0) )); then
-            color="${YELLOW}"
-            indicator="${BULLET}"
-        else
-            color="${WHITE}"
-            indicator=" "
-        fi
-        
-        # Truncate command for readability
-        cmd_short=$(echo "$cmd" | cut -c1-40)
-        printf "${color}${indicator} %-7s %-9s %5.1f  %5.1f  %-40s${NC}\n" "$pid" "$user" "$cpu" "$mem" "$cmd_short"
-    done
-    
-    echo ""
-    print_subheader "TOP MEMORY CONSUMERS"
-    
-    echo -e "${WHITE}${BOLD}  PID    USER      CPU%   MEM%   COMMAND${NC}"
-    echo -e "${DIM}  ───────────────────────────────────────────────────────────${NC}"
-    
-    ps aux --sort=-%mem | head -6 | tail -5 | while read user pid cpu mem vsz rss tty stat start time cmd; do
-        # Color code based on memory usage
-        if (( $(echo "$mem > 30" | bc -l 2>/dev/null || echo 0) )); then
-            color="${RED}"
-            indicator="${WARNING}"
-        elif (( $(echo "$mem > 10" | bc -l 2>/dev/null || echo 0) )); then
-            color="${YELLOW}"
-            indicator="${BULLET}"
-        else
-            color="${WHITE}"
-            indicator=" "
-        fi
-        
-        cmd_short=$(echo "$cmd" | cut -c1-40)
-        printf "${color}${indicator} %-7s %-9s %5.1f  %5.1f  %-40s${NC}\n" "$pid" "$user" "$cpu" "$mem" "$cmd_short"
-    done
-}
-
-# Function to check suspicious processes
-check_suspicious_processes() {
-    print_subheader "SECURITY ANALYSIS"
-    
-    # Known suspicious patterns
-    suspicious_patterns="xmrig|minergate|minerd|cpuminer|cryptonight|monero|kworkerds|kdevtmpfsi|kinsing|ddgs|qW3xT|2t3ik|dbused|xmr|crypto-pool|minexmr|pool.min"
-    
-    echo -e "${WHITE}${BOLD}Checking for suspicious processes...${NC}"
-    echo ""
-    
-    suspicious_found=0
-    
-    # Check running processes
     for pattern in $(echo $suspicious_patterns | tr '|' ' '); do
         if pgrep -f "$pattern" >/dev/null 2>&1; then
+            if [ $suspicious_found -eq 0 ]; then
+                echo ""
+                echo -e "${BG_RED}${WHITE}${BOLD} ${WARNING} SECURITY ALERT - SUSPICIOUS PROCESSES DETECTED ${WARNING} ${NC}"
+                echo ""
+            fi
             suspicious_found=1
             pids=$(pgrep -f "$pattern")
-            echo -e "${BG_RED}${WHITE}${BOLD} ${CROSS} THREAT DETECTED ${NC}"
-            echo -e "${RED}${BOLD}  Pattern: ${pattern}${NC}"
-            echo -e "${RED}  PIDs: ${pids}${NC}"
-            
-            for pid in $pids; do
-                if [ -r "/proc/$pid/cmdline" ]; then
-                    cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-60)
-                    echo -e "${YELLOW}  ${ARROW} ${cmd}${NC}"
-                fi
-            done
-            echo ""
+            echo -e "${RED}${BOLD}  ${CROSS} Pattern: ${pattern}${NC}"
+            echo -e "${RED}     PIDs: ${pids}${NC}"
         fi
     done
     
-    if [ $suspicious_found -eq 0 ]; then
-        echo -e "${GREEN}${CHECK} No suspicious processes detected${NC}"
-    else
-        echo -e "${RED}${BOLD}${WARNING} Action Required:${NC}"
-        echo -e "${YELLOW}  1. Kill suspicious processes immediately${NC}"
-        echo -e "${YELLOW}  2. Check for persistence mechanisms${NC}"
-        echo -e "${YELLOW}  3. Review system logs${NC}"
+    return $suspicious_found
+}
+
+# Function to kill a process
+kill_process() {
+    local pid=$1
+    echo ""
+    echo -e "${YELLOW}Attempting to kill process ${pid}...${NC}"
+    
+    # Check if process exists
+    if ! ps -p $pid > /dev/null 2>&1; then
+        echo -e "${RED}Process $pid does not exist${NC}"
+        return 1
     fi
     
-    # Check for fake kernel threads
-    echo ""
-    echo -e "${WHITE}${BOLD}Checking for fake kernel threads...${NC}"
-    echo ""
+    # Get process info before killing
+    local pinfo=$(ps -p $pid -o comm=,user=,%cpu=,%mem= 2>/dev/null)
+    echo -e "${BLUE}Process info: ${pinfo}${NC}"
     
-    fake_found=0
-    ps aux | grep -E "\[.*\]" | while read line; do
-        pid=$(echo "$line" | awk '{print $2}')
-        cmd=$(echo "$line" | awk '{for(i=11;i<=NF;i++) printf "%s ", $i}')
+    # Try graceful termination first
+    kill -TERM $pid 2>/dev/null
+    sleep 2
+    
+    if ps -p $pid > /dev/null 2>&1; then
+        # Force kill if still running
+        echo -e "${YELLOW}Process didn't terminate, forcing...${NC}"
+        kill -KILL $pid 2>/dev/null
+        sleep 1
         
-        if [ -d "/proc/$pid" ] && [ -r "/proc/$pid/exe" ]; then
-            exe=$(readlink -f /proc/$pid/exe 2>/dev/null)
-            if [ -n "$exe" ] && [ "$exe" != "[kernel]" ]; then
-                fake_found=1
-                echo -e "${RED}${WARNING} Suspicious kernel thread: PID $pid${NC}"
-                echo -e "${YELLOW}  Command: ${cmd}${NC}"
-                echo -e "${YELLOW}  Exe: ${exe}${NC}"
-            fi
+        if ps -p $pid > /dev/null 2>&1; then
+            echo -e "${RED}${CROSS} Failed to kill process $pid${NC}"
+            return 1
         fi
-    done
+    fi
     
-    if [ $fake_found -eq 0 ]; then
-        echo -e "${GREEN}${CHECK} No fake kernel threads detected${NC}"
+    echo -e "${GREEN}${CHECK} Successfully killed process $pid${NC}"
+    return 0
+}
+
+# Function to show process details
+show_process_details() {
+    local pid=$1
+    
+    if [ ! -d "/proc/$pid" ]; then
+        echo -e "${RED}Process $pid not found${NC}"
+        return
+    fi
+    
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}  Process Details for PID: ${pid}${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Command line
+    if [ -r "/proc/$pid/cmdline" ]; then
+        local cmdline=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)
+        echo -e "${BLUE}${BOLD}Command:${NC}"
+        echo -e "  ${WHITE}${cmdline:0:100}${NC}"
+        echo ""
+    fi
+    
+    # Executable path
+    if [ -r "/proc/$pid/exe" ]; then
+        local exe_path=$(readlink -f /proc/$pid/exe 2>/dev/null)
+        echo -e "${BLUE}${BOLD}Executable:${NC} ${WHITE}${exe_path:-[Deleted]}${NC}"
+        
+        if echo "$exe_path" | grep -qE "^(/tmp|/var/tmp|/dev/shm)"; then
+            echo -e "${RED}  ${WARNING} Warning: Suspicious location!${NC}"
+        fi
+        echo ""
+    fi
+    
+    # Process status
+    if [ -r "/proc/$pid/status" ]; then
+        echo -e "${BLUE}${BOLD}Status Info:${NC}"
+        grep -E "^(Name|State|Uid|Gid|PPid|Threads):" /proc/$pid/status | while read line; do
+            echo -e "  ${WHITE}${line}${NC}"
+        done
+        echo ""
+    fi
+    
+    # Network connections
+    echo -e "${BLUE}${BOLD}Network Connections:${NC}"
+    local net_conn=$(sudo lsof -p $pid 2>/dev/null | grep -E "(TCP|UDP)" | head -5)
+    if [ -n "$net_conn" ]; then
+        echo "$net_conn" | while read line; do
+            echo -e "  ${WHITE}${line:0:80}${NC}"
+        done
+    else
+        echo -e "  ${DIM}No network connections${NC}"
+    fi
+    echo ""
+    
+    # Open files (top 5)
+    echo -e "${BLUE}${BOLD}Open Files (top 5):${NC}"
+    local files=$(sudo lsof -p $pid 2>/dev/null | grep -v -E "(TCP|UDP|pipe|socket)" | tail -5)
+    if [ -n "$files" ]; then
+        echo "$files" | while read line; do
+            echo -e "  ${WHITE}${line:0:80}${NC}"
+        done
+    else
+        echo -e "  ${DIM}No significant files${NC}"
     fi
 }
 
-# Function to show service status
-show_service_status() {
-    print_subheader "SYSTEM SERVICES STATUS"
+# Main display function
+main_display() {
+    clear
     
-    # Critical services to check
-    critical_services="ssh sshd nginx apache2 httpd mysql mariadb postgresql docker fail2ban ufw firewalld"
-    
-    echo -e "${WHITE}${BOLD}Critical Services:${NC}"
+    # Header
     echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}              PROCESS CHECK & SYSTEM MONITOR                     ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}║${WHITE}  $(date '+%Y-%m-%d %H:%M:%S')                                          ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
     
-    for service in $critical_services; do
-        if systemctl list-unit-files | grep -q "^${service}\.service"; then
-            status=$(systemctl is-active "$service" 2>/dev/null)
-            enabled=$(systemctl is-enabled "$service" 2>/dev/null)
-            
-            if [ "$status" = "active" ]; then
-                status_color="${GREEN}"
-                status_icon="${CHECK}"
-            elif [ "$status" = "inactive" ]; then
-                status_color="${DIM}"
-                status_icon="-"
+    # Quick System Stats
+    echo ""
+    echo -e "${GREEN}${BOLD}System: ${NC}${WHITE}$(hostname)${NC}  ${GREEN}${BOLD}Kernel: ${NC}${WHITE}$(uname -r)${NC}  ${GREEN}${BOLD}Uptime: ${NC}${WHITE}$(uptime -p | sed 's/up //')${NC}"
+    
+    # Check for suspicious processes first (alert at top if found)
+    check_suspicious
+    local has_suspicious=$?
+    
+    # System Resources
+    print_section "SYSTEM RESOURCES"
+    free -h | sed 's/^/  /'
+    
+    # CPU Usage Bar Graph (simple visual)
+    echo ""
+    cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
+    echo -e "${BLUE}${BOLD}  CPU Usage: ${NC}"
+    printf "  ["
+    for i in {1..50}; do
+        if (( $(echo "$i <= $cpu_usage/2" | bc -l 2>/dev/null || echo 0) )); then
+            if (( $(echo "$cpu_usage > 80" | bc -l 2>/dev/null || echo 0) )); then
+                printf "${RED}█${NC}"
+            elif (( $(echo "$cpu_usage > 50" | bc -l 2>/dev/null || echo 0) )); then
+                printf "${YELLOW}█${NC}"
             else
-                status_color="${RED}"
-                status_icon="${CROSS}"
+                printf "${GREEN}█${NC}"
             fi
-            
-            if [ "$enabled" = "enabled" ]; then
-                enabled_color="${GREEN}"
-            else
-                enabled_color="${DIM}"
-            fi
-            
-            printf "  ${status_color}${status_icon}${NC} %-15s ${status_color}[%-8s]${NC} ${enabled_color}[%-8s]${NC}\n" \
-                   "$service" "$status" "$enabled"
+        else
+            printf "${DIM}·${NC}"
+        fi
+    done
+    printf "] ${WHITE}${cpu_usage}%%${NC}\n"
+    
+    # Load Average with color coding
+    echo ""
+    load_avg=$(cat /proc/loadavg | awk '{print $1, $2, $3}')
+    cores=$(nproc)
+    echo -e "${BLUE}${BOLD}  Load Average: ${NC}${WHITE}${load_avg}${NC} ${DIM}(${cores} cores)${NC}"
+    
+    # CPU Processes
+    print_section "CPU PROCESSES (>0.1% CPU)"
+    echo -e "${WHITE}${BOLD}  PID    PPID   USER      %CPU  %MEM  STAT  START     COMMAND${NC}"
+    echo -e "${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
+    ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%cpu | awk 'NR==1 || $4>0.1' | tail -n +2 | head -15 | while read line; do
+        cpu_val=$(echo "$line" | awk '{print $4}')
+        if (( $(echo "$cpu_val > 50" | bc -l 2>/dev/null || echo 0) )); then
+            echo -e "${RED}  ${line}${NC}"
+        elif (( $(echo "$cpu_val > 20" | bc -l 2>/dev/null || echo 0) )); then
+            echo -e "${YELLOW}  ${line}${NC}"
+        else
+            echo -e "${WHITE}  ${line}${NC}"
         fi
     done
     
-    # Show failed services
-    echo ""
-    echo -e "${WHITE}${BOLD}Failed Services:${NC}"
-    echo ""
+    # Memory Processes
+    print_section "MEMORY PROCESSES (>0.1% MEM)"
+    echo -e "${WHITE}${BOLD}  PID    PPID   USER      %CPU  %MEM  STAT  START     COMMAND${NC}"
+    echo -e "${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
+    ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%mem | awk 'NR==1 || $5>0.1' | tail -n +2 | head -15 | while read line; do
+        mem_val=$(echo "$line" | awk '{print $5}')
+        if (( $(echo "$mem_val > 30" | bc -l 2>/dev/null || echo 0) )); then
+            echo -e "${RED}  ${line}${NC}"
+        elif (( $(echo "$mem_val > 10" | bc -l 2>/dev/null || echo 0) )); then
+            echo -e "${YELLOW}  ${line}${NC}"
+        else
+            echo -e "${WHITE}  ${line}${NC}"
+        fi
+    done
     
-    failed_services=$(systemctl list-units --state=failed --no-pager --no-legend 2>/dev/null)
-    if [ -z "$failed_services" ]; then
+    # Running Services
+    print_section "RUNNING SERVICES"
+    systemctl list-units --type=service --state=running --no-pager | head -20 | tail -n +2 | while read line; do
+        if echo "$line" | grep -q "failed\|error"; then
+            echo -e "${RED}  ${line}${NC}"
+        elif echo "$line" | grep -q "running"; then
+            echo -e "${GREEN}  ${line}${NC}"
+        else
+            echo -e "${WHITE}  ${line}${NC}"
+        fi
+    done
+    
+    # Failed Services
+    print_section "FAILED SERVICES"
+    failed_count=$(systemctl list-units --state=failed --no-legend | wc -l)
+    if [ $failed_count -eq 0 ]; then
         echo -e "${GREEN}  ${CHECK} No failed services${NC}"
     else
-        echo "$failed_services" | while read line; do
-            service_name=$(echo "$line" | awk '{print $1}')
-            echo -e "${RED}  ${CROSS} ${service_name}${NC}"
+        systemctl list-units --state=failed --no-pager --no-legend | while read line; do
+            echo -e "${RED}  ${CROSS} ${line}${NC}"
         done
+    fi
+    
+    # Summary Statistics
+    echo ""
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}${BOLD}  SUMMARY STATISTICS${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    
+    total_procs=$(ps aux | wc -l)
+    running_procs=$(ps r | wc -l)
+    sleeping_procs=$(ps aux | awk '$8 ~ /S/' | wc -l)
+    zombie_procs=$(ps aux | awk '$8 ~ /Z/' | wc -l)
+    
+    echo ""
+    echo -e "${BLUE}  Total Processes: ${WHITE}${total_procs}${NC}"
+    echo -e "${BLUE}  Running: ${GREEN}${running_procs}${NC}  ${BLUE}Sleeping: ${WHITE}${sleeping_procs}${NC}  ${BLUE}Zombie: ${NC}$([ $zombie_procs -gt 0 ] && echo -e "${RED}${zombie_procs}${NC}" || echo -e "${GREEN}0${NC}")"
+    
+    if [ $has_suspicious -eq 1 ]; then
+        echo ""
+        echo -e "${BG_RED}${WHITE}${BOLD}  ${WARNING} SECURITY ISSUES REQUIRE ATTENTION ${WARNING}  ${NC}"
     fi
 }
 
-# Function for interactive process investigation
-investigate_process() {
-    local search_term="$1"
-    
-    print_header "PROCESS INVESTIGATION: $search_term"
-    
-    # Search for the process
-    echo -e "${WHITE}${BOLD}Searching for: ${YELLOW}${search_term}${NC}"
+# Interactive actions function
+show_actions() {
+    echo ""
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}${BOLD}  AVAILABLE ACTIONS${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${YELLOW}K)${NC} Kill a process by PID"
+    echo -e "  ${YELLOW}D)${NC} Show detailed info for a PID"
+    echo -e "  ${YELLOW}S)${NC} Search for a process by name"
+    echo -e "  ${YELLOW}R)${NC} Refresh display"
+    echo -e "  ${YELLOW}E)${NC} Export report to file"
+    echo -e "  ${YELLOW}Q)${NC} Quit"
+    echo ""
+    echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+}
+
+# Search for process function
+search_process() {
+    local search_term=$1
+    echo ""
+    echo -e "${CYAN}Searching for: ${YELLOW}${search_term}${NC}"
     echo ""
     
-    # Find matching processes
-    pids=$(pgrep -f "$search_term" 2>/dev/null)
-    
-    if [ -z "$pids" ]; then
-        echo -e "${YELLOW}${INFO} No running processes match '${search_term}'${NC}"
-        echo ""
-        
-        # Check if it's a service
-        if systemctl list-unit-files | grep -q "${search_term}"; then
-            echo -e "${BLUE}Found as a system service:${NC}"
-            systemctl status "${search_term}" --no-pager 2>/dev/null | head -10
-        fi
+    local results=$(ps aux | grep -i "$search_term" | grep -v grep)
+    if [ -z "$results" ]; then
+        echo -e "${RED}No processes found matching '${search_term}'${NC}"
     else
-        echo -e "${GREEN}${CHECK} Found process(es): ${pids}${NC}"
-        echo ""
-        
-        for pid in $pids; do
-            echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
-            echo -e "${CYAN}║${WHITE}${BOLD}  PID: ${pid}${CYAN}                                        ║${NC}"
-            echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            
-            if [ -d "/proc/$pid" ]; then
-                # Basic info
-                echo -e "${WHITE}${BOLD}Basic Information:${NC}"
-                
-                # Command line
-                if [ -r "/proc/$pid/cmdline" ]; then
-                    cmdline=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)
-                    echo -e "${BLUE}  ${BULLET} Command:${NC} ${cmdline:0:80}"
-                fi
-                
-                # Executable
-                if [ -r "/proc/$pid/exe" ]; then
-                    exe_path=$(readlink -f /proc/$pid/exe 2>/dev/null)
-                    echo -e "${BLUE}  ${BULLET} Executable:${NC} ${exe_path:-[Deleted]}"
-                    
-                    # Check location
-                    if echo "$exe_path" | grep -qE "^(/tmp|/var/tmp|/dev/shm)"; then
-                        echo -e "${RED}    ${WARNING} Suspicious location!${NC}"
-                    fi
-                fi
-                
-                # User
-                if [ -r "/proc/$pid/status" ]; then
-                    uid=$(grep "^Uid:" /proc/$pid/status | awk '{print $2}')
-                    username=$(id -nu $uid 2>/dev/null || echo "UID:$uid")
-                    echo -e "${BLUE}  ${BULLET} User:${NC} ${username}"
-                    
-                    # Parent process
-                    ppid=$(grep "^PPid:" /proc/$pid/status | awk '{print $2}')
-                    if [ "$ppid" -ne 0 ]; then
-                        parent_cmd=$(ps -p $ppid -o comm= 2>/dev/null)
-                        echo -e "${BLUE}  ${BULLET} Parent:${NC} ${parent_cmd} (PID: ${ppid})"
-                    fi
-                fi
-                
-                # Resource usage
-                echo ""
-                echo -e "${WHITE}${BOLD}Resource Usage:${NC}"
-                if command -v ps &>/dev/null; then
-                    ps_info=$(ps -p $pid -o %cpu,%mem,etime 2>/dev/null | tail -1)
-                    cpu=$(echo "$ps_info" | awk '{print $1}')
-                    mem=$(echo "$ps_info" | awk '{print $2}')
-                    etime=$(echo "$ps_info" | awk '{print $3}')
-                    
-                    echo -e "${BLUE}  ${BULLET} CPU:${NC} ${cpu}%"
-                    echo -e "${BLUE}  ${BULLET} Memory:${NC} ${mem}%"
-                    echo -e "${BLUE}  ${BULLET} Runtime:${NC} ${etime}"
-                fi
-                
-                # Network connections
-                echo ""
-                echo -e "${WHITE}${BOLD}Network Activity:${NC}"
-                net_conn=$(sudo lsof -p $pid 2>/dev/null | grep -E "(TCP|UDP)" | head -3)
-                if [ -n "$net_conn" ]; then
-                    echo "$net_conn" | while read line; do
-                        echo -e "${BLUE}  ${ARROW}${NC} ${line}"
-                    done
-                else
-                    echo -e "${DIM}  No network connections${NC}"
-                fi
-                
-                # Open files
-                echo ""
-                echo -e "${WHITE}${BOLD}Open Files (top 5):${NC}"
-                files=$(sudo lsof -p $pid 2>/dev/null | grep -v -E "(TCP|UDP|pipe|socket)" | tail -5)
-                if [ -n "$files" ]; then
-                    echo "$files" | while read line; do
-                        echo -e "${BLUE}  ${ARROW}${NC} ${line:0:70}"
-                    done
-                else
-                    echo -e "${DIM}  No significant files open${NC}"
-                fi
-            fi
-            echo ""
+        echo -e "${WHITE}${BOLD}USER       PID  %CPU  %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND${NC}"
+        echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"
+        echo "$results" | while read line; do
+            echo -e "${WHITE}${line}${NC}"
         done
     fi
 }
 
-# Main menu function
-show_menu() {
+# Export report function
+export_report() {
+    local filename="process_report_$(date +%Y%m%d_%H%M%S).txt"
+    echo "Generating report..."
+    {
+        echo "PROCESS CHECK REPORT"
+        echo "Generated: $(date)"
+        echo "Host: $(hostname)"
+        echo "================================"
+        echo ""
+        echo "SYSTEM RESOURCES:"
+        free -h
+        echo ""
+        echo "CPU PROCESSES:"
+        ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%cpu | head -20
+        echo ""
+        echo "MEMORY PROCESSES:"
+        ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%mem | head -20
+        echo ""
+        echo "SERVICES:"
+        systemctl list-units --type=service --state=running --no-pager
+        echo ""
+        echo "FAILED SERVICES:"
+        systemctl list-units --state=failed --no-pager
+    } > "$filename"
+    
+    echo -e "${GREEN}${CHECK} Report saved to: ${WHITE}${filename}${NC}"
+}
+
+# Main execution
+main() {
+    # Show main display first
+    main_display
+    
+    # Then show action menu
     while true; do
-        clear
+        show_actions
+        read -p "$(echo -e ${YELLOW}${BOLD}'Select action: '${NC})" action
         
-        # Header
-        echo ""
-        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║${NC}                                                                  ${CYAN}║${NC}"
-        echo -e "${CYAN}║${WHITE}${BOLD}            🔍 PROCESS CHECK & MONITORING TOOL 🔍                 ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}                                                                  ${CYAN}║${NC}"
-        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        
-        # Quick system status
-        cpu_now=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
-        mem_percent=$(free | grep "^Mem:" | awk '{printf("%.1f", $3/$2 * 100)}')
-        
-        echo -e "${WHITE}${BOLD}Quick Status:${NC}"
-        echo -e "  ${BLUE}CPU:${NC} ${GREEN}${cpu_now}%${NC}  ${BLUE}Memory:${NC} ${GREEN}${mem_percent}%${NC}  ${BLUE}Uptime:${NC} ${GREEN}$(uptime -p | sed 's/up //')${NC}"
-        echo ""
-        echo -e "${DIM}══════════════════════════════════════════════════════════════════${NC}"
-        echo ""
-        
-        # Menu options
-        echo -e "${WHITE}${BOLD}SELECT AN OPTION:${NC}"
-        echo ""
-        echo -e "  ${YELLOW}1)${NC} ${WHITE}System Overview${NC} ${DIM}- Resource usage & system info${NC}"
-        echo ""
-        echo -e "  ${YELLOW}2)${NC} ${WHITE}Top Processes${NC} ${DIM}- CPU & Memory consumers${NC}"
-        echo ""
-        echo -e "  ${YELLOW}3)${NC} ${WHITE}Service Status${NC} ${DIM}- System services health${NC}"
-        echo ""
-        echo -e "  ${YELLOW}4)${NC} ${WHITE}Security Check${NC} ${DIM}- Scan for suspicious processes${NC}"
-        echo ""
-        echo -e "  ${YELLOW}5)${NC} ${WHITE}Investigate Process${NC} ${DIM}- Deep dive into specific process${NC}"
-        echo ""
-        echo -e "  ${YELLOW}6)${NC} ${WHITE}Full Report${NC} ${DIM}- Complete system analysis${NC}"
-        echo ""
-        echo -e "  ${YELLOW}R)${NC} ${WHITE}Refresh${NC} ${DIM}- Refresh current view${NC}"
-        echo ""
-        echo -e "  ${RED}0)${NC} ${WHITE}Exit${NC}"
-        echo ""
-        echo -e "${DIM}══════════════════════════════════════════════════════════════════${NC}"
-        echo ""
-        
-        read -p "$(echo -e ${YELLOW}${BOLD}'Enter choice: '${NC})" choice
-        
-        case $choice in
-            1)
-                clear
-                show_system_overview
-                ;;
-            2)
-                clear
-                show_top_processes
-                ;;
-            3)
-                clear
-                show_service_status
-                ;;
-            4)
-                clear
-                check_suspicious_processes
-                ;;
-            5)
-                clear
-                echo ""
-                read -p "$(echo -e ${YELLOW}${BOLD}'Enter process name or PID to investigate: '${NC})" search_term
-                if [ -n "$search_term" ]; then
-                    clear
-                    investigate_process "$search_term"
+        case ${action,,} in
+            k)
+                read -p "$(echo -e ${YELLOW}'Enter PID to kill: '${NC})" pid
+                if [[ "$pid" =~ ^[0-9]+$ ]]; then
+                    kill_process $pid
+                else
+                    echo -e "${RED}Invalid PID${NC}"
                 fi
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
                 ;;
-            6)
-                clear
-                show_system_overview
-                show_top_processes
-                show_service_status
-                check_suspicious_processes
+            d)
+                read -p "$(echo -e ${YELLOW}'Enter PID for details: '${NC})" pid
+                if [[ "$pid" =~ ^[0-9]+$ ]]; then
+                    show_process_details $pid
+                else
+                    echo -e "${RED}Invalid PID${NC}"
+                fi
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
                 ;;
-            r|R)
-                continue
+            s)
+                read -p "$(echo -e ${YELLOW}'Enter process name to search: '${NC})" search_term
+                if [ -n "$search_term" ]; then
+                    search_process "$search_term"
+                fi
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
                 ;;
-            0)
+            r)
+                main_display
+                ;;
+            e)
+                export_report
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
+                ;;
+            q)
                 echo ""
                 echo -e "${GREEN}${BOLD}Goodbye! Stay secure! 👋${NC}"
                 echo ""
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Invalid option!${NC}"
+                echo -e "${RED}Invalid option${NC}"
                 sleep 1
-                continue
                 ;;
         esac
-        
-        echo ""
-        echo -e "${DIM}══════════════════════════════════════════════════════════════════${NC}"
-        echo ""
-        read -p "$(echo -e ${YELLOW}${BOLD}'Press Enter to continue...'${NC})"
     done
 }
 
-# Check if running with sufficient privileges for some operations
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${YELLOW}${WARNING} Note: Some features work better with sudo privileges${NC}"
-    echo -e "${DIM}Run with: sudo $0${NC}"
+# Check for help flag
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    echo "Process Check Script"
+    echo "Usage: $0 [options]"
     echo ""
+    echo "Options:"
+    echo "  -h, --help     Show this help message"
+    echo "  -w, --watch    Auto-refresh every 5 seconds"
+    echo ""
+    exit 0
 fi
 
-# Main execution
-show_menu
+# Check for watch mode
+if [[ "$1" == "-w" ]] || [[ "$1" == "--watch" ]]; then
+    while true; do
+        main_display
+        echo ""
+        echo -e "${DIM}Auto-refresh in 5 seconds... Press Ctrl+C to stop${NC}"
+        sleep 5
+    done
+else
+    # Normal mode
+    main
+fi
