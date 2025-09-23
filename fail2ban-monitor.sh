@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fail2ban Advanced Monitor Script - All Errors Fixed
+# Fail2ban Advanced Monitor Script - Final Polished Version
 # Shows comprehensive fail2ban statistics and management
 # Part of VPS Security Tools Suite
 # Host as: fail2ban-monitor.sh
@@ -61,6 +61,24 @@ print_section() {
     echo -e "${YELLOW}${BOLD}  $1${NC}"
     echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
     echo ""
+}
+
+# Function to convert seconds to human readable time
+seconds_to_human() {
+    local seconds=$1
+    local days=$((seconds / 86400))
+    local hours=$(( (seconds % 86400) / 3600 ))
+    local minutes=$(( (seconds % 3600) / 60 ))
+    
+    if [ $days -gt 0 ]; then
+        echo "${days} days"
+    elif [ $hours -gt 0 ]; then
+        echo "${hours} hours"
+    elif [ $minutes -gt 0 ]; then
+        echo "${minutes} minutes"
+    else
+        echo "${seconds} seconds"
+    fi
 }
 
 # Function to get cached IP location
@@ -148,11 +166,12 @@ calculate_remaining_time() {
             echo "Expiring"
         fi
     else
-        echo "${bantime}s"
+        # If no timestamp, show the configured ban time in human readable format
+        echo "$(seconds_to_human $bantime)"
     fi
 }
 
-# Function to get jail efficiency
+# Function to get jail efficiency - UPDATED to show decimal
 calculate_efficiency() {
     local failed=$1
     local banned=$2
@@ -164,7 +183,8 @@ calculate_efficiency() {
     if [ "$failed" -eq 0 ]; then
         echo "N/A"
     else
-        local efficiency=$(echo "scale=1; $banned * 100 / $failed" | bc 2>/dev/null || echo "0")
+        # Show one decimal place
+        local efficiency=$(echo "scale=1; $banned * 100 / $failed" | bc 2>/dev/null || echo "0.0")
         echo "${efficiency}%"
     fi
 }
@@ -302,7 +322,7 @@ main_display() {
                     
                     # Highlight if efficiency is concerning
                     if [ "$failed" -gt 100 ] && [ "$banned" -eq 0 ]; then
-                        efficiency="${RED}0% ${WARNING}${NC}"
+                        efficiency="${RED}0.0% ${WARNING}${NC}"
                     fi
                     
                     printf "${color}  %-15s ${status_text} %-10s %-10s %-10s %-12s${NC}\n" \
@@ -353,7 +373,7 @@ main_display() {
                 for ip in $banned_ips; do
                     # Get ban timestamp from log
                     ban_time=$(grep "Ban $ip" /var/log/fail2ban.log 2>/dev/null | tail -1 | awk '{print $2}' | cut -d',' -f1)
-                    [ -z "$ban_time" ] && ban_time="Unknown"
+                    [ -z "$ban_time" ] && ban_time="Recent"
                     
                     echo "${ip}|${jail}|${ban_time}" >> "$temp_file"
                 done
@@ -544,8 +564,17 @@ main_display() {
             fi
         fi
         
-        # Average ban duration
-        echo -e "${BLUE}  ${BULLET} Default Ban Duration:${NC} ${WHITE}10 minutes${NC} ${DIM}(configurable per jail)${NC}"
+        # Default ban duration - get from first jail
+        if [ -n "$jail_list" ]; then
+            first_jail=$(echo "$jail_list" | cut -d',' -f1 | xargs)
+            if [ -n "$first_jail" ]; then
+                bantime=$(fail2ban-client get "$first_jail" bantime 2>/dev/null | grep -oE '[0-9]+' | head -1)
+                if [ -n "$bantime" ]; then
+                    human_time=$(seconds_to_human $bantime)
+                    echo -e "${BLUE}  ${BULLET} Default Ban Duration:${NC} ${WHITE}${human_time}${NC} ${DIM}(${bantime} seconds)${NC}"
+                fi
+            fi
+        fi
         
         # Total IPs blocked all-time
         total_all_time=$(grep -c "Ban" /var/log/fail2ban.log 2>/dev/null)
@@ -746,7 +775,7 @@ show_ip_intelligence() {
     fi
 }
 
-# Whitelist management
+# Whitelist management - FIXED color display
 manage_whitelist() {
     local whitelist_file="/etc/fail2ban/jail.local"
     
@@ -762,7 +791,7 @@ manage_whitelist() {
         ignoreip=$(grep "^ignoreip" "$whitelist_file" 2>/dev/null | sed 's/ignoreip\s*=\s*//')
         if [ -n "$ignoreip" ]; then
             echo "$ignoreip" | tr ' ' '\n' | while read ip; do
-                [ -n "$ip" ] && echo "  ${GREEN}${CHECK}${NC} $ip"
+                [ -n "$ip" ] && echo -e "  ${GREEN}${CHECK}${NC} $ip"
             done
         else
             echo -e "${DIM}  No IPs whitelisted${NC}"
@@ -859,6 +888,57 @@ export_banned_ips() {
     echo -e "${GREEN}${CHECK} Exported to: $filename${NC}"
 }
 
+# Jail configuration - ENHANCED with human readable output
+show_jail_config() {
+    local jail=$1
+    
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}  Jail Configuration: ${jail}${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Get configuration values
+    bantime=$(fail2ban-client get "$jail" bantime 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    findtime=$(fail2ban-client get "$jail" findtime 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    maxretry=$(fail2ban-client get "$jail" maxretry 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    
+    if [ -n "$bantime" ]; then
+        human_bantime=$(seconds_to_human $bantime)
+        echo -e "${BLUE}${BOLD}Ban Duration:${NC}"
+        echo -e "  ${WHITE}${human_bantime}${NC} ${DIM}(${bantime} seconds)${NC}"
+        echo ""
+    fi
+    
+    if [ -n "$findtime" ]; then
+        human_findtime=$(seconds_to_human $findtime)
+        echo -e "${BLUE}${BOLD}Find Time Window:${NC}"
+        echo -e "  ${WHITE}${human_findtime}${NC} ${DIM}(${findtime} seconds)${NC}"
+        echo -e "  ${DIM}Time period to count failures${NC}"
+        echo ""
+    fi
+    
+    if [ -n "$maxretry" ]; then
+        echo -e "${BLUE}${BOLD}Max Retry Attempts:${NC}"
+        echo -e "  ${WHITE}${maxretry} attempts${NC}"
+        echo -e "  ${DIM}Number of failures before ban${NC}"
+        echo ""
+    fi
+    
+    # Show current status
+    echo -e "${BLUE}${BOLD}Current Status:${NC}"
+    jail_status=$(fail2ban-client status "$jail" 2>/dev/null)
+    if [ -n "$jail_status" ]; then
+        failed=$(echo "$jail_status" | grep "Total failed:" | awk '{print $NF}')
+        banned=$(echo "$jail_status" | grep "Total banned:" | awk '{print $NF}')
+        current=$(echo "$jail_status" | grep "Currently banned:" | awk '{print $NF}')
+        
+        echo -e "  Failed attempts: ${WHITE}${failed}${NC}"
+        echo -e "  Total banned: ${WHITE}${banned}${NC}"
+        echo -e "  Currently banned: ${WHITE}${current}${NC}"
+    fi
+}
+
 # Main execution
 main() {
     # Show main display first
@@ -911,15 +991,12 @@ main() {
                 ;;
             j)
                 echo ""
-                echo -e "${CYAN}Jail Configuration:${NC}"
-                fail2ban-client status
+                echo -e "${CYAN}Available Jails:${NC}"
+                fail2ban-client status | grep "Jail list"
                 echo ""
                 read -p "$(echo -e ${YELLOW}'Enter jail name for details: '${NC})" jail
                 if [ -n "$jail" ]; then
-                    echo ""
-                    fail2ban-client get "$jail" bantime 2>/dev/null && echo ""
-                    fail2ban-client get "$jail" findtime 2>/dev/null && echo ""
-                    fail2ban-client get "$jail" maxretry 2>/dev/null
+                    show_jail_config "$jail"
                 fi
                 read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
                 ;;
