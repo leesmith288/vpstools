@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fail2ban Advanced Monitor Script - Fixed Version
+# Fail2ban Advanced Monitor Script - All Errors Fixed
 # Shows comprehensive fail2ban statistics and management
 # Part of VPS Security Tools Suite
 # Host as: fail2ban-monitor.sh
@@ -77,17 +77,19 @@ get_ip_location_cached() {
     [ ! -f "$CACHE_FILE" ] && touch "$CACHE_FILE"
     
     # Clean old cache entries (older than 7 days)
-    if [ -f "$CACHE_FILE" ]; then
+    if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
         temp_cache="/tmp/cache_temp_$$"
         current_time=$(date +%s)
         while IFS='|' read -r cached_ip cached_time cached_location; do
-            if [ -n "$cached_ip" ]; then
-                age=$(( (current_time - cached_time) / 86400 ))
-                if [ $age -lt $CACHE_AGE ]; then
-                    echo "${cached_ip}|${cached_time}|${cached_location}" >> "$temp_cache"
+            if [ -n "$cached_ip" ] && [ -n "$cached_time" ]; then
+                if [[ "$cached_time" =~ ^[0-9]+$ ]]; then
+                    age=$(( (current_time - cached_time) / 86400 ))
+                    if [ $age -lt $CACHE_AGE ]; then
+                        echo "${cached_ip}|${cached_time}|${cached_location}" >> "$temp_cache"
+                    fi
                 fi
             fi
-        done < "$CACHE_FILE"
+        done < "$CACHE_FILE" 2>/dev/null
         [ -f "$temp_cache" ] && mv "$temp_cache" "$CACHE_FILE"
     fi
     
@@ -124,7 +126,8 @@ calculate_remaining_time() {
     local ip=$2
     
     # Get ban time from jail configuration
-    local bantime=$(fail2ban-client get $jail bantime 2>/dev/null | grep -oE '[0-9]+' || echo "600")
+    local bantime=$(fail2ban-client get $jail bantime 2>/dev/null | grep -oE '[0-9]+' | head -1)
+    [ -z "$bantime" ] && bantime="600"
     
     # Try to find when IP was banned from log
     local ban_timestamp=$(grep "Ban $ip" /var/log/fail2ban.log 2>/dev/null | tail -1 | awk '{print $1, $2}')
@@ -153,6 +156,10 @@ calculate_remaining_time() {
 calculate_efficiency() {
     local failed=$1
     local banned=$2
+    
+    # Ensure we have numbers
+    failed=${failed:-0}
+    banned=${banned:-0}
     
     if [ "$failed" -eq 0 ]; then
         echo "N/A"
@@ -218,7 +225,8 @@ main_display() {
         status="${GREEN}Active ${CHECK}${NC}"
         
         # Get version
-        version=$(fail2ban-client version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "Unknown")
+        version=$(fail2ban-client version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        [ -z "$version" ] && version="Unknown"
         
         # Get uptime
         uptime=$(systemctl show fail2ban --property=ActiveEnterTimestamp --value)
@@ -238,8 +246,12 @@ main_display() {
     fi
     
     # Get jail count
-    jail_list=$(fail2ban-client status | grep "Jail list" | sed 's/.*:\s*//')
-    total_jails=$(echo "$jail_list" | tr ',' '\n' | wc -l)
+    jail_list=$(fail2ban-client status 2>/dev/null | grep "Jail list" | sed 's/.*:\s*//')
+    if [ -n "$jail_list" ]; then
+        total_jails=$(echo "$jail_list" | tr ',' '\n' | grep -v "^$" | wc -l)
+    else
+        total_jails=0
+    fi
     
     echo -e "${BLUE}  Status:${NC} $status"
     echo -e "${BLUE}  Version:${NC} ${WHITE}${version}${NC}"
@@ -247,7 +259,7 @@ main_display() {
     echo -e "${BLUE}  Total Jails:${NC} ${WHITE}${total_jails}${NC}"
     
     # Jail Statistics Table
-    print_section "JAIL STATISTICS (Last 7 days)"
+    print_section "JAIL STATISTICS"
     
     # Table header
     printf "${WHITE}${BOLD}"
@@ -259,43 +271,59 @@ main_display() {
     total_banned=0
     total_current=0
     
-    echo "$jail_list" | tr ',' '\n' | while read jail; do
-        jail=$(echo $jail | xargs) # trim whitespace
-        if [ -n "$jail" ]; then
-            # Get jail status
-            jail_status=$(fail2ban-client status "$jail" 2>/dev/null)
-            
-            if [ -n "$jail_status" ]; then
-                failed=$(echo "$jail_status" | grep "Total failed:" | awk '{print $NF}')
-                banned=$(echo "$jail_status" | grep "Total banned:" | awk '{print $NF}')
-                current=$(echo "$jail_status" | grep "Currently banned:" | awk '{print $NF}')
+    if [ -n "$jail_list" ]; then
+        echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
+            jail=$(echo $jail | xargs) # trim whitespace
+            if [ -n "$jail" ]; then
+                # Get jail status
+                jail_status=$(fail2ban-client status "$jail" 2>/dev/null)
                 
-                # Calculate efficiency
-                efficiency=$(calculate_efficiency "$failed" "$banned")
-                
-                # Color based on activity
-                if [ "$current" -gt 0 ]; then
-                    color="${YELLOW}"
-                    status_text="${GREEN}ACTIVE${NC}"
-                else
-                    color="${WHITE}"
-                    status_text="${GREEN}ACTIVE${NC}"
+                if [ -n "$jail_status" ]; then
+                    failed=$(echo "$jail_status" | grep "Total failed:" | awk '{print $NF}' | head -1)
+                    banned=$(echo "$jail_status" | grep "Total banned:" | awk '{print $NF}' | head -1)
+                    current=$(echo "$jail_status" | grep "Currently banned:" | awk '{print $NF}' | head -1)
+                    
+                    # Ensure we have numbers
+                    failed=${failed:-0}
+                    banned=${banned:-0}
+                    current=${current:-0}
+                    
+                    # Calculate efficiency
+                    efficiency=$(calculate_efficiency "$failed" "$banned")
+                    
+                    # Color based on activity
+                    if [ "$current" -gt 0 ]; then
+                        color="${YELLOW}"
+                        status_text="${GREEN}ACTIVE${NC}"
+                    else
+                        color="${WHITE}"
+                        status_text="${GREEN}ACTIVE${NC}"
+                    fi
+                    
+                    # Highlight if efficiency is concerning
+                    if [ "$failed" -gt 100 ] && [ "$banned" -eq 0 ]; then
+                        efficiency="${RED}0% ${WARNING}${NC}"
+                    fi
+                    
+                    printf "${color}  %-15s ${status_text} %-10s %-10s %-10s %-12s${NC}\n" \
+                        "$jail" "$failed" "$banned" "$current" "$efficiency"
+                    
+                    # Update totals - store in temp file to persist across subshell
+                    echo "$failed $banned $current" >> /tmp/jail_totals_$$
                 fi
-                
-                # Highlight if efficiency is concerning
-                if [ "$failed" -gt 100 ] && [ "$banned" -eq 0 ]; then
-                    efficiency="${RED}0% ${WARNING}${NC}"
-                fi
-                
-                printf "${color}  %-15s ${status_text} %-10s %-10s %-10s %-12s${NC}\n" \
-                    "$jail" "$failed" "$banned" "$current" "$efficiency"
-                
-                total_failed=$((total_failed + failed))
-                total_banned=$((total_banned + banned))
-                total_current=$((total_current + current))
             fi
+        done
+        
+        # Calculate totals from temp file
+        if [ -f /tmp/jail_totals_$$ ]; then
+            while read f b c; do
+                total_failed=$((total_failed + f))
+                total_banned=$((total_banned + b))
+                total_current=$((total_current + c))
+            done < /tmp/jail_totals_$$
+            rm -f /tmp/jail_totals_$$
         fi
-    done
+    fi
     
     # Total row
     printf "${DIM}  ─────────────────────────────────────────────────────────────────────────\n${NC}"
@@ -306,7 +334,7 @@ main_display() {
     # Currently Banned IPs (Table format)
     print_section "CURRENTLY BANNED IPS (Latest 15)"
     
-    if [ $total_current -gt 0 ]; then
+    if [ "$total_current" -gt 0 ]; then
         # Table header
         printf "${WHITE}${BOLD}"
         printf "  %-18s %-22s %-10s %-12s %-10s\n" "IP Address" "Location" "Jail" "Ban Time" "Remaining"
@@ -316,7 +344,7 @@ main_display() {
         temp_file="/tmp/banned_ips_$$"
         > "$temp_file"
         
-        echo "$jail_list" | tr ',' '\n' | while read jail; do
+        echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
             jail=$(echo $jail | xargs)
             if [ -n "$jail" ]; then
                 # Get banned IPs for this jail
@@ -333,31 +361,33 @@ main_display() {
         done
         
         # Sort by time and show latest 15
-        sort -t'|' -k3 -r "$temp_file" 2>/dev/null | head -15 | while IFS='|' read -r ip jail ban_time; do
-            if [ -n "$ip" ]; then
-                # Get location (cached)
-                location=$(get_ip_location_cached "$ip")
-                
-                # Calculate remaining time
-                remaining=$(calculate_remaining_time "$jail" "$ip")
-                
-                # Color based on location risk
-                if echo "$location" | grep -qE "$HIGH_RISK"; then
-                    loc_color="${RED}"
-                elif echo "$location" | grep -qE "$MEDIUM_RISK"; then
-                    loc_color="${YELLOW}"
-                else
-                    loc_color="${WHITE}"
+        if [ -f "$temp_file" ] && [ -s "$temp_file" ]; then
+            sort -t'|' -k3 -r "$temp_file" 2>/dev/null | head -15 | while IFS='|' read -r ip jail ban_time; do
+                if [ -n "$ip" ]; then
+                    # Get location (cached)
+                    location=$(get_ip_location_cached "$ip")
+                    
+                    # Calculate remaining time
+                    remaining=$(calculate_remaining_time "$jail" "$ip")
+                    
+                    # Color based on location risk
+                    if echo "$location" | grep -qE "$HIGH_RISK"; then
+                        loc_color="${RED}"
+                    elif echo "$location" | grep -qE "$MEDIUM_RISK"; then
+                        loc_color="${YELLOW}"
+                    else
+                        loc_color="${WHITE}"
+                    fi
+                    
+                    printf "  %-18s ${loc_color}%-22s${NC} %-10s %-12s %-10s\n" \
+                        "$ip" "${location:0:22}" "$jail" "$ban_time" "$remaining"
                 fi
-                
-                printf "  %-18s ${loc_color}%-22s${NC} %-10s %-12s %-10s\n" \
-                    "$ip" "${location:0:22}" "$jail" "$ban_time" "$remaining"
-            fi
-        done
+            done
+        fi
         
         rm -f "$temp_file"
         
-        if [ $total_current -gt 15 ]; then
+        if [ "$total_current" -gt 15 ]; then
             echo ""
             echo -e "${DIM}  ... and $((total_current - 15)) more banned IPs${NC}"
         fi
@@ -365,7 +395,7 @@ main_display() {
         echo -e "${DIM}  No IPs currently banned${NC}"
     fi
     
-    # Attack Trends (7 days) - FIXED
+    # Attack Trends (7 days)
     print_section "ATTACK TRENDS (7 days)"
     
     if [ -f /var/log/fail2ban.log ]; then
@@ -376,21 +406,21 @@ main_display() {
             date=$(date -d "$i days ago" '+%Y-%m-%d')
             day_name=$(date -d "$i days ago" '+%a')
             
-            # Count bans for this day - handle empty result
-            count=$(grep "$date" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban" || echo "0")
+            # Count bans for this day
+            count=$(grep "$date" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban")
             
-            # Ensure count is a number
+            # Ensure count is a valid number
             if ! [[ "$count" =~ ^[0-9]+$ ]]; then
                 count=0
             fi
             
-            # Create bar - FIXED: handle zero properly
+            # Create bar
             printf "  %s %s [" "$day_name" "$date"
             
-            if [ $count -gt 0 ]; then
+            if [ "$count" -gt 0 ]; then
                 bar_length=$((count / 2))
-                [ $bar_length -eq 0 ] && bar_length=1  # Minimum 1 bar if count > 0
-                [ $bar_length -gt 30 ] && bar_length=30  # Maximum 30 bars
+                [ $bar_length -eq 0 ] && bar_length=1
+                [ $bar_length -gt 30 ] && bar_length=30
                 
                 for j in $(seq 1 $bar_length); do
                     if [ $count -gt 50 ]; then
@@ -419,18 +449,20 @@ main_display() {
     country_file="/tmp/countries_$$"
     > "$country_file"
     
-    echo "$jail_list" | tr ',' '\n' | while read jail; do
-        jail=$(echo $jail | xargs)
-        if [ -n "$jail" ]; then
-            banned_ips=$(fail2ban-client status "$jail" 2>/dev/null | grep -A 100 "Banned IP list:" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-            for ip in $banned_ips; do
-                location=$(get_ip_location_cached "$ip")
-                # Extract country from location
-                country=$(echo "$location" | sed 's/.*,\s*//' | sed 's/^\s*//')
-                [ "$country" = "Unknown" ] || [ "$country" = "Private/Local" ] || echo "$country" >> "$country_file"
-            done
-        fi
-    done
+    if [ -n "$jail_list" ]; then
+        echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
+            jail=$(echo $jail | xargs)
+            if [ -n "$jail" ]; then
+                banned_ips=$(fail2ban-client status "$jail" 2>/dev/null | grep -A 100 "Banned IP list:" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+                for ip in $banned_ips; do
+                    location=$(get_ip_location_cached "$ip")
+                    # Extract country from location
+                    country=$(echo "$location" | sed 's/.*,\s*//' | sed 's/^\s*//')
+                    [ "$country" = "Unknown" ] || [ "$country" = "Private/Local" ] || echo "$country" >> "$country_file"
+                done
+            fi
+        done
+    fi
     
     if [ -s "$country_file" ]; then
         sort "$country_file" | uniq -c | sort -rn | head -10 | while read count country; do
@@ -448,7 +480,7 @@ main_display() {
                 color="${WHITE}"
             fi
             
-            # Create bar - FIXED
+            # Create bar
             printf "${color}  %-20s${NC} [" "$country"
             
             if [ $count -gt 0 ]; then
@@ -478,19 +510,25 @@ main_display() {
         if [ -n "$peak_hour" ]; then
             hour_count=$(echo "$peak_hour" | awk '{print $1}')
             hour_time=$(echo "$peak_hour" | awk '{print $2}')
-            echo -e "${BLUE}  ${BULLET} Peak Attack Hour:${NC} ${WHITE}${hour_time}:00-${hour_time}:59 UTC (${hour_count} bans)${NC}"
+            if [ -n "$hour_count" ] && [ -n "$hour_time" ]; then
+                echo -e "${BLUE}  ${BULLET} Peak Attack Hour:${NC} ${WHITE}${hour_time}:00-${hour_time}:59 UTC (${hour_count} bans)${NC}"
+            fi
         fi
         
         # Repeat offenders (last 7 days)
         repeat_file="/tmp/repeats_$$"
         grep "Ban" /var/log/fail2ban.log 2>/dev/null | tail -1000 | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | \
             sort | uniq -c | sort -rn | awk '$1>1' > "$repeat_file"
-        repeat_count=$(wc -l < "$repeat_file" 2>/dev/null || echo "0")
+        repeat_count=$(wc -l < "$repeat_file" 2>/dev/null)
+        repeat_count=${repeat_count:-0}
+        
         if [ "$repeat_count" -gt 0 ]; then
             top_repeat=$(head -1 "$repeat_file")
-            repeat_ip=$(echo "$top_repeat" | awk '{print $2}')
-            repeat_times=$(echo "$top_repeat" | awk '{print $1}')
-            echo -e "${BLUE}  ${BULLET} Repeat Offenders:${NC} ${WHITE}${repeat_count} IPs${NC} ${DIM}(Top: ${repeat_ip} - ${repeat_times} times)${NC}"
+            if [ -n "$top_repeat" ]; then
+                repeat_ip=$(echo "$top_repeat" | awk '{print $2}')
+                repeat_times=$(echo "$top_repeat" | awk '{print $1}')
+                echo -e "${BLUE}  ${BULLET} Repeat Offenders:${NC} ${WHITE}${repeat_count} IPs${NC} ${DIM}(Top: ${repeat_ip} - ${repeat_times} times)${NC}"
+            fi
         fi
         rm -f "$repeat_file"
         
@@ -500,7 +538,9 @@ main_display() {
             if [ -n "$top_port" ]; then
                 port_count=$(echo "$top_port" | awk '{print $1}')
                 port_num=$(echo "$top_port" | awk '{print $3}')
-                echo -e "${BLUE}  ${BULLET} Most Targeted Port:${NC} ${WHITE}${port_num} (${port_count} attempts)${NC}"
+                if [ -n "$port_count" ] && [ -n "$port_num" ]; then
+                    echo -e "${BLUE}  ${BULLET} Most Targeted Port:${NC} ${WHITE}${port_num} (${port_count} attempts)${NC}"
+                fi
             fi
         fi
         
@@ -508,12 +548,17 @@ main_display() {
         echo -e "${BLUE}  ${BULLET} Default Ban Duration:${NC} ${WHITE}10 minutes${NC} ${DIM}(configurable per jail)${NC}"
         
         # Total IPs blocked all-time
-        total_all_time=$(grep -c "Ban" /var/log/fail2ban.log 2>/dev/null || echo "0")
+        total_all_time=$(grep -c "Ban" /var/log/fail2ban.log 2>/dev/null)
+        total_all_time=${total_all_time:-0}
         echo -e "${BLUE}  ${BULLET} Total Bans (all-time):${NC} ${WHITE}${total_all_time}${NC}"
     fi
     
     # Bans in last hour
-    last_hour_bans=$(grep "$(date '+%Y-%m-%d %H')" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban" || echo "0")
+    last_hour_bans=$(grep "$(date '+%Y-%m-%d %H')" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban")
+    # Ensure it's a number
+    if ! [[ "$last_hour_bans" =~ ^[0-9]+$ ]]; then
+        last_hour_bans=0
+    fi
     echo -e "${BLUE}  ${BULLET} Bans in Last Hour:${NC} ${WHITE}${last_hour_bans}${NC}"
     
     # Security Alerts
@@ -521,49 +566,38 @@ main_display() {
     
     alerts=0
     
-    # Check ban rate
-    if [ "$last_hour_bans" -gt 100 ]; then
-        echo -e "${BG_RED}${WHITE}${BOLD}  ${WARNING} DDoS ALERT: ${last_hour_bans} bans in last hour! ${NC}"
-        alerts=$((alerts + 1))
-    elif [ "$last_hour_bans" -gt 50 ]; then
-        echo -e "${RED}  ${WARNING} Critical: High attack rate (${last_hour_bans} bans/hour)${NC}"
-        alerts=$((alerts + 1))
-    elif [ "$last_hour_bans" -gt 20 ]; then
-        echo -e "${YELLOW}  ${WARNING} Warning: Elevated attack rate (${last_hour_bans} bans/hour)${NC}"
-        alerts=$((alerts + 1))
+    # Check ban rate - ensure we have a number
+    if [[ "$last_hour_bans" =~ ^[0-9]+$ ]]; then
+        if [ "$last_hour_bans" -gt 100 ]; then
+            echo -e "${BG_RED}${WHITE}${BOLD}  ${WARNING} DDoS ALERT: ${last_hour_bans} bans in last hour! ${NC}"
+            alerts=$((alerts + 1))
+        elif [ "$last_hour_bans" -gt 50 ]; then
+            echo -e "${RED}  ${WARNING} Critical: High attack rate (${last_hour_bans} bans/hour)${NC}"
+            alerts=$((alerts + 1))
+        elif [ "$last_hour_bans" -gt 20 ]; then
+            echo -e "${YELLOW}  ${WARNING} Warning: Elevated attack rate (${last_hour_bans} bans/hour)${NC}"
+            alerts=$((alerts + 1))
+        fi
     fi
     
     # Check for jails with 0% efficiency
-    echo "$jail_list" | tr ',' '\n' | while read jail; do
-        jail=$(echo $jail | xargs)
-        if [ -n "$jail" ]; then
-            jail_status=$(fail2ban-client status "$jail" 2>/dev/null)
-            failed=$(echo "$jail_status" | grep "Total failed:" | awk '{print $NF}')
-            banned=$(echo "$jail_status" | grep "Total banned:" | awk '{print $NF}')
-            
-            if [ "$failed" -gt 100 ] && [ "$banned" -eq 0 ]; then
-                echo -e "${YELLOW}  ${WARNING} Jail '${jail}' may be misconfigured (0% efficiency)${NC}"
-                alerts=$((alerts + 1))
-            fi
-        fi
-    done
-    
-    # Check for new countries (first time seen today)
-    if [ -f /var/log/fail2ban.log ]; then
-        today_ips=$(grep "$(date '+%Y-%m-%d')" /var/log/fail2ban.log 2>/dev/null | grep "Ban" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sort -u)
-        for ip in $today_ips; do
-            location=$(get_ip_location_cached "$ip")
-            country=$(echo "$location" | sed 's/.*,\s*//')
-            
-            # Check if this country appeared before today
-            yesterday_count=$(grep "$(date -d yesterday '+%Y-%m-%d')" /var/log/fail2ban.log 2>/dev/null | \
-                xargs -I {} bash -c "get_ip_location_cached {}" | grep -c "$country" || echo "0")
-            
-            if [ "$yesterday_count" -eq 0 ] && [ "$country" != "Unknown" ] && [ "$country" != "Private/Local" ]; then
-                if echo "$country" | grep -qE "$HIGH_RISK"; then
-                    echo -e "${RED}  ${WARNING} New high-risk country detected: ${country}${NC}"
+    if [ -n "$jail_list" ]; then
+        echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
+            jail=$(echo $jail | xargs)
+            if [ -n "$jail" ]; then
+                jail_status=$(fail2ban-client status "$jail" 2>/dev/null)
+                failed=$(echo "$jail_status" | grep "Total failed:" | awk '{print $NF}' | head -1)
+                banned=$(echo "$jail_status" | grep "Total banned:" | awk '{print $NF}' | head -1)
+                
+                failed=${failed:-0}
+                banned=${banned:-0}
+                
+                if [[ "$failed" =~ ^[0-9]+$ ]] && [[ "$banned" =~ ^[0-9]+$ ]]; then
+                    if [ "$failed" -gt 100 ] && [ "$banned" -eq 0 ]; then
+                        echo -e "${YELLOW}  ${WARNING} Jail '${jail}' may be misconfigured (0% efficiency)${NC}"
+                        alerts=$((alerts + 1))
+                    fi
                 fi
-                break
             fi
         done
     fi
@@ -593,6 +627,52 @@ show_actions() {
     echo ""
     echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"
     echo ""
+}
+
+# Historical analysis - FIXED
+show_historical_analysis() {
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}  HISTORICAL ANALYSIS (30 days)${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    if [ ! -f /var/log/fail2ban.log ]; then
+        echo -e "${RED}No fail2ban log found${NC}"
+        return
+    fi
+    
+    echo -e "${BLUE}${BOLD}Daily Ban Statistics:${NC}"
+    echo ""
+    
+    for i in {29..0}; do
+        date=$(date -d "$i days ago" '+%Y-%m-%d')
+        day_name=$(date -d "$i days ago" '+%a')
+        count=$(grep "$date" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban")
+        
+        # Ensure count is a number
+        if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+        
+        # Only show days with activity
+        if [ "$count" -gt 0 ]; then
+            printf "  %s %s: %3d bans\n" "$day_name" "$date" "$count"
+        fi
+    done
+    
+    echo ""
+    echo -e "${BLUE}${BOLD}Top 10 Banned IPs (30 days):${NC}"
+    echo ""
+    
+    grep "Ban" /var/log/fail2ban.log 2>/dev/null | \
+        grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | \
+        sort | uniq -c | sort -rn | head -10 | while read count ip; do
+        if [ -n "$ip" ]; then
+            location=$(get_ip_location_cached "$ip")
+            printf "  %-18s %4d bans  (%s)\n" "$ip" "$count" "$location"
+        fi
+    done
 }
 
 # IP Intelligence function
@@ -640,7 +720,8 @@ show_ip_intelligence() {
     echo -e "${BLUE}${BOLD}Fail2ban History:${NC}"
     
     if [ -f /var/log/fail2ban.log ]; then
-        ban_count=$(grep -c "Ban $ip" /var/log/fail2ban.log 2>/dev/null || echo "0")
+        ban_count=$(grep -c "Ban $ip" /var/log/fail2ban.log 2>/dev/null)
+        ban_count=${ban_count:-0}
         echo "  Total bans: $ban_count"
         
         if [ $ban_count -gt 0 ]; then
@@ -663,45 +744,6 @@ show_ip_intelligence() {
             echo "  ${line:0:80}"
         done
     fi
-}
-
-# Historical analysis
-show_historical_analysis() {
-    echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${WHITE}${BOLD}  HISTORICAL ANALYSIS (30 days)${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    
-    if [ ! -f /var/log/fail2ban.log ]; then
-        echo -e "${RED}No fail2ban log found${NC}"
-        return
-    fi
-    
-    echo -e "${BLUE}${BOLD}Daily Ban Statistics:${NC}"
-    echo ""
-    
-    for i in {29..0}; do
-        date=$(date -d "$i days ago" '+%Y-%m-%d')
-        day_name=$(date -d "$i days ago" '+%a')
-        count=$(grep "$date" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban" || echo "0")
-        
-        # Only show days with activity
-        if [ $count -gt 0 ]; then
-            printf "  %s %s: %3d bans\n" "$day_name" "$date" "$count"
-        fi
-    done
-    
-    echo ""
-    echo -e "${BLUE}${BOLD}Top 10 Banned IPs (30 days):${NC}"
-    echo ""
-    
-    grep "Ban" /var/log/fail2ban.log 2>/dev/null | \
-        grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | \
-        sort | uniq -c | sort -rn | head -10 | while read count ip; do
-        location=$(get_ip_location_cached "$ip")
-        printf "  %-18s %4d bans  (%s)\n" "$ip" "$count" "$location"
-    done
 }
 
 # Whitelist management
@@ -743,7 +785,6 @@ manage_whitelist() {
             read -p "$(echo -e ${YELLOW}'Enter IP to whitelist: '${NC})" new_ip
             if [[ "$new_ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
                 echo -e "${YELLOW}Adding $new_ip to whitelist...${NC}"
-                # This would require editing the config file
                 echo -e "${DIM}Note: Manual edit of /etc/fail2ban/jail.local required${NC}"
                 echo -e "${DIM}Add to ignoreip line and restart fail2ban${NC}"
             else
@@ -768,21 +809,23 @@ show_all_banned() {
     
     jail_list=$(fail2ban-client status | grep "Jail list" | sed 's/.*:\s*//')
     
-    echo "$jail_list" | tr ',' '\n' | while read jail; do
-        jail=$(echo $jail | xargs)
-        if [ -n "$jail" ]; then
-            banned_ips=$(fail2ban-client status "$jail" 2>/dev/null | grep -A 1000 "Banned IP list:" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-            
-            if [ -n "$banned_ips" ]; then
-                echo -e "${YELLOW}${BOLD}Jail: $jail${NC}"
-                echo "$banned_ips" | while read ip; do
-                    location=$(get_ip_location_cached "$ip")
-                    printf "  %-18s %s\n" "$ip" "($location)"
-                done
-                echo ""
+    if [ -n "$jail_list" ]; then
+        echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
+            jail=$(echo $jail | xargs)
+            if [ -n "$jail" ]; then
+                banned_ips=$(fail2ban-client status "$jail" 2>/dev/null | grep -A 1000 "Banned IP list:" | grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+                
+                if [ -n "$banned_ips" ]; then
+                    echo -e "${YELLOW}${BOLD}Jail: $jail${NC}"
+                    echo "$banned_ips" | while read ip; do
+                        location=$(get_ip_location_cached "$ip")
+                        printf "  %-18s %s\n" "$ip" "($location)"
+                    done
+                    echo ""
+                fi
             fi
-        fi
-    done
+        done
+    fi
 }
 
 # Export banned IPs
@@ -799,16 +842,18 @@ export_banned_ips() {
         
         jail_list=$(fail2ban-client status | grep "Jail list" | sed 's/.*:\s*//')
         
-        echo "$jail_list" | tr ',' '\n' | while read jail; do
-            jail=$(echo $jail | xargs)
-            if [ -n "$jail" ]; then
-                echo "# Jail: $jail"
-                fail2ban-client status "$jail" 2>/dev/null | \
-                    grep -A 1000 "Banned IP list:" | \
-                    grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
-                echo ""
-            fi
-        done
+        if [ -n "$jail_list" ]; then
+            echo "$jail_list" | tr ',' '\n' | grep -v "^$" | while read jail; do
+                jail=$(echo $jail | xargs)
+                if [ -n "$jail" ]; then
+                    echo "# Jail: $jail"
+                    fail2ban-client status "$jail" 2>/dev/null | \
+                        grep -A 1000 "Banned IP list:" | \
+                        grep -oE '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
+                    echo ""
+                fi
+            done
+        fi
     } > "$filename"
     
     echo -e "${GREEN}${CHECK} Exported to: $filename${NC}"
