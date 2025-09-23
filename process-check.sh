@@ -1,8 +1,17 @@
 #!/bin/bash
-# Process Check Script - Direct Display Version
-# Shows all information immediately, then offers actions
+# Process Check Script - Enhanced Version with Process Tree
+# Shows all information immediately with proper alignment
 # Part of VPS Security Tools Suite
 # Host as: process-check.sh
+
+# Check if running with sudo
+if [ "$EUID" -ne 0 ]; then
+    echo ""
+    echo "⚠️  This script requires sudo privileges for full functionality"
+    echo "Please run: sudo $0"
+    echo ""
+    exit 1
+fi
 
 # Enhanced Colors for Better Visibility
 RED='\033[1;91m'       # Bright Red
@@ -118,6 +127,11 @@ show_process_details() {
         echo ""
     fi
     
+    # Show process tree for this PID
+    echo -e "${BLUE}${BOLD}Process Tree:${NC}"
+    pstree -p $pid 2>/dev/null | sed 's/^/  /'
+    echo ""
+    
     # Executable path
     if [ -r "/proc/$pid/exe" ]; then
         local exe_path=$(readlink -f /proc/$pid/exe 2>/dev/null)
@@ -140,7 +154,7 @@ show_process_details() {
     
     # Network connections
     echo -e "${BLUE}${BOLD}Network Connections:${NC}"
-    local net_conn=$(sudo lsof -p $pid 2>/dev/null | grep -E "(TCP|UDP)" | head -5)
+    local net_conn=$(lsof -p $pid 2>/dev/null | grep -E "(TCP|UDP)" | head -5)
     if [ -n "$net_conn" ]; then
         echo "$net_conn" | while read line; do
             echo -e "  ${WHITE}${line:0:80}${NC}"
@@ -152,7 +166,7 @@ show_process_details() {
     
     # Open files (top 5)
     echo -e "${BLUE}${BOLD}Open Files (top 5):${NC}"
-    local files=$(sudo lsof -p $pid 2>/dev/null | grep -v -E "(TCP|UDP|pipe|socket)" | tail -5)
+    local files=$(lsof -p $pid 2>/dev/null | grep -v -E "(TCP|UDP|pipe|socket)" | tail -5)
     if [ -n "$files" ]; then
         echo "$files" | while read line; do
             echo -e "  ${WHITE}${line:0:80}${NC}"
@@ -211,11 +225,26 @@ main_display() {
     cores=$(nproc)
     echo -e "${BLUE}${BOLD}  Load Average: ${NC}${WHITE}${load_avg}${NC} ${DIM}(${cores} cores)${NC}"
     
-    # CPU Processes
+    # Process Tree - NEW SECTION
+    print_section "PROCESS TREE"
+    # Show compact process tree
+    if command -v pstree >/dev/null 2>&1; then
+        pstree -U | head -30 | sed 's/^/  /'
+        total_lines=$(pstree | wc -l)
+        if [ $total_lines -gt 30 ]; then
+            echo -e "${DIM}  ... and $((total_lines - 30)) more lines${NC}"
+        fi
+    else
+        echo -e "${YELLOW}  pstree not installed. Install with: apt install psmisc${NC}"
+    fi
+    
+    # CPU Processes - WITH FIXED ALIGNMENT
     print_section "CPU PROCESSES (>0.1% CPU)"
-    echo -e "${WHITE}${BOLD}  PID    PPID   USER      %CPU  %MEM  STAT  START     COMMAND${NC}"
-    echo -e "${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
-    ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%cpu | awk 'NR==1 || $4>0.1' | tail -n +2 | head -15 | while read line; do
+    echo -e "${WHITE}${BOLD}  PID     PPID    USER         CPU%   MEM%   STAT   START      COMMAND${NC}"
+    echo -e "${DIM}  ──────────────────────────────────────────────────────────────────────────${NC}"
+    
+    ps -eo pid:8,ppid:8,user:12,%cpu:6,%mem:6,stat:6,start:10,comm:20 --sort=-%cpu | \
+    awk 'NR==1 || $4>0.1' | tail -n +2 | head -15 | while IFS= read -r line; do
         cpu_val=$(echo "$line" | awk '{print $4}')
         if (( $(echo "$cpu_val > 50" | bc -l 2>/dev/null || echo 0) )); then
             echo -e "${RED}  ${line}${NC}"
@@ -226,11 +255,13 @@ main_display() {
         fi
     done
     
-    # Memory Processes
+    # Memory Processes - WITH FIXED ALIGNMENT
     print_section "MEMORY PROCESSES (>0.1% MEM)"
-    echo -e "${WHITE}${BOLD}  PID    PPID   USER      %CPU  %MEM  STAT  START     COMMAND${NC}"
-    echo -e "${DIM}  ─────────────────────────────────────────────────────────────────────${NC}"
-    ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%mem | awk 'NR==1 || $5>0.1' | tail -n +2 | head -15 | while read line; do
+    echo -e "${WHITE}${BOLD}  PID     PPID    USER         CPU%   MEM%   STAT   START      COMMAND${NC}"
+    echo -e "${DIM}  ──────────────────────────────────────────────────────────────────────────${NC}"
+    
+    ps -eo pid:8,ppid:8,user:12,%cpu:6,%mem:6,stat:6,start:10,comm:20 --sort=-%mem | \
+    awk 'NR==1 || $5>0.1' | tail -n +2 | head -15 | while IFS= read -r line; do
         mem_val=$(echo "$line" | awk '{print $5}')
         if (( $(echo "$mem_val > 30" | bc -l 2>/dev/null || echo 0) )); then
             echo -e "${RED}  ${line}${NC}"
@@ -243,14 +274,11 @@ main_display() {
     
     # Running Services
     print_section "RUNNING SERVICES"
-    systemctl list-units --type=service --state=running --no-pager | head -20 | tail -n +2 | while read line; do
-        if echo "$line" | grep -q "failed\|error"; then
-            echo -e "${RED}  ${line}${NC}"
-        elif echo "$line" | grep -q "running"; then
-            echo -e "${GREEN}  ${line}${NC}"
-        else
-            echo -e "${WHITE}  ${line}${NC}"
-        fi
+    systemctl list-units --type=service --state=running --no-pager --no-legend | head -20 | \
+    while IFS= read -r line; do
+        service_name=$(echo "$line" | awk '{print $1}')
+        # Format with proper spacing
+        printf "  ${GREEN}●${NC} %-40s ${GREEN}active${NC}\n" "$service_name"
     done
     
     # Failed Services
@@ -259,8 +287,9 @@ main_display() {
     if [ $failed_count -eq 0 ]; then
         echo -e "${GREEN}  ${CHECK} No failed services${NC}"
     else
-        systemctl list-units --state=failed --no-pager --no-legend | while read line; do
-            echo -e "${RED}  ${CROSS} ${line}${NC}"
+        systemctl list-units --state=failed --no-pager --no-legend | while IFS= read -r line; do
+            service_name=$(echo "$line" | awk '{print $1}')
+            printf "  ${RED}${CROSS}${NC} %-40s ${RED}failed${NC}\n" "$service_name"
         done
     fi
     
@@ -279,6 +308,14 @@ main_display() {
     echo -e "${BLUE}  Total Processes: ${WHITE}${total_procs}${NC}"
     echo -e "${BLUE}  Running: ${GREEN}${running_procs}${NC}  ${BLUE}Sleeping: ${WHITE}${sleeping_procs}${NC}  ${BLUE}Zombie: ${NC}$([ $zombie_procs -gt 0 ] && echo -e "${RED}${zombie_procs}${NC}" || echo -e "${GREEN}0${NC}")"
     
+    # Top 5 processes by total resource usage
+    echo ""
+    echo -e "${BLUE}  Top Resource Users:${NC}"
+    ps aux --sort=-%cpu | head -6 | tail -5 | while read user pid cpu mem rest; do
+        total_resource=$(echo "$cpu + $mem" | bc)
+        printf "    ${DIM}PID %5s: CPU %5s%% + MEM %5s%% = %5s%% total${NC}\n" "$pid" "$cpu" "$mem" "$total_resource"
+    done
+    
     if [ $has_suspicious -eq 1 ]; then
         echo ""
         echo -e "${BG_RED}${WHITE}${BOLD}  ${WARNING} SECURITY ISSUES REQUIRE ATTENTION ${WARNING}  ${NC}"
@@ -293,7 +330,8 @@ show_actions() {
     echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "  ${YELLOW}K)${NC} Kill a process by PID"
-    echo -e "  ${YELLOW}D)${NC} Show detailed info for a PID"
+    echo -e "  ${YELLOW}D)${NC} Show detailed info for a PID"  
+    echo -e "  ${YELLOW}T)${NC} Show full process tree"
     echo -e "  ${YELLOW}S)${NC} Search for a process by name"
     echo -e "  ${YELLOW}R)${NC} Refresh display"
     echo -e "  ${YELLOW}E)${NC} Export report to file"
@@ -310,16 +348,27 @@ search_process() {
     echo -e "${CYAN}Searching for: ${YELLOW}${search_term}${NC}"
     echo ""
     
-    local results=$(ps aux | grep -i "$search_term" | grep -v grep)
-    if [ -z "$results" ]; then
-        echo -e "${RED}No processes found matching '${search_term}'${NC}"
-    else
-        echo -e "${WHITE}${BOLD}USER       PID  %CPU  %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND${NC}"
-        echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"
-        echo "$results" | while read line; do
+    # Show process tree for searched term
+    echo -e "${BLUE}${BOLD}Process Tree:${NC}"
+    pstree -p | grep -i "$search_term" | head -10
+    echo ""
+    
+    echo -e "${BLUE}${BOLD}Process List:${NC}"
+    echo -e "${WHITE}${BOLD}USER       PID    %CPU   %MEM   VSZ      RSS    TTY    STAT  START    TIME  COMMAND${NC}"
+    echo -e "${DIM}──────────────────────────────────────────────────────────────────────────────────${NC}"
+    
+    ps aux | head -1 > /tmp/ps_header
+    ps aux | grep -i "$search_term" | grep -v grep > /tmp/ps_results
+    
+    if [ -s /tmp/ps_results ]; then
+        while IFS= read -r line; do
             echo -e "${WHITE}${line}${NC}"
-        done
+        done < /tmp/ps_results
+    else
+        echo -e "${RED}No processes found matching '${search_term}'${NC}"
     fi
+    
+    rm -f /tmp/ps_header /tmp/ps_results
 }
 
 # Export report function
@@ -334,6 +383,9 @@ export_report() {
         echo ""
         echo "SYSTEM RESOURCES:"
         free -h
+        echo ""
+        echo "PROCESS TREE:"
+        pstree
         echo ""
         echo "CPU PROCESSES:"
         ps -eo pid,ppid,user,%cpu,%mem,stat,start,comm --sort=-%cpu | head -20
@@ -382,6 +434,16 @@ main() {
                 echo ""
                 read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
                 ;;
+            t)
+                echo ""
+                echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+                echo -e "${WHITE}${BOLD}  FULL PROCESS TREE${NC}"
+                echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
+                echo ""
+                pstree -U
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
+                ;;
             s)
                 read -p "$(echo -e ${YELLOW}'Enter process name to search: '${NC})" search_term
                 if [ -n "$search_term" ]; then
@@ -415,7 +477,7 @@ main() {
 # Check for help flag
 if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     echo "Process Check Script"
-    echo "Usage: $0 [options]"
+    echo "Usage: sudo $0 [options]"
     echo ""
     echo "Options:"
     echo "  -h, --help     Show this help message"
