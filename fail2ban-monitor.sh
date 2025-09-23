@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fail2ban Advanced Monitor Script
+# Fail2ban Advanced Monitor Script - Fixed Version
 # Shows comprehensive fail2ban statistics and management
 # Part of VPS Security Tools Suite
 # Host as: fail2ban-monitor.sh
@@ -365,7 +365,7 @@ main_display() {
         echo -e "${DIM}  No IPs currently banned${NC}"
     fi
     
-    # Attack Trends (7 days)
+    # Attack Trends (7 days) - FIXED
     print_section "ATTACK TRENDS (7 days)"
     
     if [ -f /var/log/fail2ban.log ]; then
@@ -375,24 +375,38 @@ main_display() {
         for i in {6..0}; do
             date=$(date -d "$i days ago" '+%Y-%m-%d')
             day_name=$(date -d "$i days ago" '+%a')
+            
+            # Count bans for this day - handle empty result
             count=$(grep "$date" /var/log/fail2ban.log 2>/dev/null | grep -c "Ban" || echo "0")
             
-            # Create bar
-            printf "  %s %s [" "$day_name" "$date"
-            bar_length=$((count / 2))
-            [ $bar_length -gt 30 ] && bar_length=30
+            # Ensure count is a number
+            if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+                count=0
+            fi
             
-            for j in $(seq 1 $bar_length); do
-                if [ $count -gt 50 ]; then
-                    printf "${RED}█${NC}"
-                elif [ $count -gt 20 ]; then
-                    printf "${YELLOW}█${NC}"
-                else
-                    printf "${GREEN}█${NC}"
-                fi
-            done
+            # Create bar - FIXED: handle zero properly
+            printf "  %s %s [" "$day_name" "$date"
+            
+            if [ $count -gt 0 ]; then
+                bar_length=$((count / 2))
+                [ $bar_length -eq 0 ] && bar_length=1  # Minimum 1 bar if count > 0
+                [ $bar_length -gt 30 ] && bar_length=30  # Maximum 30 bars
+                
+                for j in $(seq 1 $bar_length); do
+                    if [ $count -gt 50 ]; then
+                        printf "${RED}█${NC}"
+                    elif [ $count -gt 20 ]; then
+                        printf "${YELLOW}█${NC}"
+                    else
+                        printf "${GREEN}█${NC}"
+                    fi
+                done
+            fi
+            
             printf "] ${WHITE}%d${NC}\n" "$count"
         done
+    else
+        echo -e "${DIM}  No fail2ban log found${NC}"
     fi
     
     # Top Attacking Countries
@@ -420,6 +434,11 @@ main_display() {
     
     if [ -s "$country_file" ]; then
         sort "$country_file" | uniq -c | sort -rn | head -10 | while read count country; do
+            # Ensure count is a number
+            if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+            
             # Color based on risk
             if echo "$country" | grep -qE "$HIGH_RISK"; then
                 color="${RED}"
@@ -429,14 +448,19 @@ main_display() {
                 color="${WHITE}"
             fi
             
-            # Create bar
+            # Create bar - FIXED
             printf "${color}  %-20s${NC} [" "$country"
-            bar_length=$((count * 2))
-            [ $bar_length -gt 30 ] && bar_length=30
             
-            for i in $(seq 1 $bar_length); do
-                printf "${color}█${NC}"
-            done
+            if [ $count -gt 0 ]; then
+                bar_length=$((count * 2))
+                [ $bar_length -eq 0 ] && bar_length=1
+                [ $bar_length -gt 30 ] && bar_length=30
+                
+                for i in $(seq 1 $bar_length); do
+                    printf "${color}█${NC}"
+                done
+            fi
+            
             printf "] ${WHITE}%d bans${NC}\n" "$count"
         done
     else
