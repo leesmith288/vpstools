@@ -356,7 +356,7 @@ main_display() {
     fi
 }
 
-# IMPROVEMENT: Function to update a project with confirmation and better cleanup
+# Function to update a project
 update_project() {
     print_section "UPDATE DOCKER PROJECT"
 
@@ -408,7 +408,6 @@ update_project() {
         project_name=$(basename "$project_dir")
 
         echo ""
-        # IMPROVEMENT: Add confirmation step
         read -p "$(echo -e ${YELLOW}${BOLD}"Are you sure you want to update '${project_name}'? (y/N): "${NC})" confirm
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             echo -e "${DIM}Update cancelled.${NC}"
@@ -430,7 +429,6 @@ update_project() {
         if docker compose pull; then
             echo ""
             echo -e "${YELLOW}Recreating containers with new images...${NC}"
-            # IMPROVEMENT: Use --remove-orphans to clean up old containers
             if docker compose up -d --remove-orphans; then
                 echo ""
                 echo -e "${GREEN}${CHECK} Update completed successfully!${NC}"
@@ -438,7 +436,6 @@ update_project() {
                 echo -e "${BLUE}Updated containers:${NC}"
                 docker compose ps
 
-                # IMPROVEMENT: Offer to prune dangling images post-update
                 dangling_images=$(docker images -f "dangling=true" -q | wc -l)
                 if [ "$dangling_images" -gt 0 ]; then
                     echo ""
@@ -457,14 +454,9 @@ update_project() {
     fi
 }
 
-
-# IMPROVEMENT: Function to clean Docker with more safety checks and better feedback
+# FIX: Re-engineered the clean function for accuracy and better feedback
 clean_docker() {
     print_section "CLEAN DOCKER SYSTEM"
-
-    # Get disk usage before cleaning to calculate reclaimed space
-    before_df=$(docker system df --format "{{.Reclaimable}}" | grep -oE '[0-9.]+[a-zA-Z]+' | sed 's/B/ B/;s/K/ KB/;s/M/ MB/;s/G/ GB/' | paste -sd ' ' -)
-    total_reclaimable_before=$(echo $before_df | awk '{s=0; for(i=1;i<=NF;i++) { if($i ~ /GB/) s+=$(i)*1024*1024*1024; else if($i ~ /MB/) s+=$(i)*1024*1024; else if($i ~ /KB/) s+=$(i)*1024; else if($i ~ /B/) s+=$(i); } print s }' i="$i")
 
     echo -e "${WHITE}${BOLD}Current disk usage:${NC}"
     echo ""
@@ -482,15 +474,24 @@ clean_docker() {
 
     read -p "$(echo -e ${YELLOW}${BOLD}'Proceed with standard cleanup? (y/N): '${NC})" confirm_prune
 
+    local reclaimed_space="Total reclaimed space: 0B" # Default value
+
     if [[ "$confirm_prune" =~ ^[Yy]$ ]]; then
         echo -e "${YELLOW}Running standard cleanup...${NC}"
-        docker system prune -f
+        # FIX: Capture the output of the prune command
+        local prune_output
+        prune_output=$(docker system prune -f)
+        
+        # FIX: Display the actual output for user feedback
+        echo -e "${DIM}${prune_output}${NC}"
+
+        # FIX: Extract the actual reclaimed space from the command's output
+        reclaimed_space=$(echo "$prune_output" | tail -n 1)
         echo -e "${GREEN}${CHECK} Standard cleanup complete.${NC}"
     else
         echo -e "${DIM}Standard cleanup cancelled.${NC}"
     fi
 
-    # IMPROVEMENT: Add a separate, explicit check for dangling volumes
     dangling_volumes=$(docker volume ls -qf dangling=true | wc -l)
     if [ "$dangling_volumes" -gt 0 ]; then
         echo ""
@@ -517,20 +518,15 @@ clean_docker() {
     docker system df
     echo ""
 
-    # IMPROVEMENT: Calculate and display the space reclaimed
-    after_df=$(docker system df --format "{{.Reclaimable}}" | grep -oE '[0-9.]+[a-zA-Z]+' | sed 's/B/ B/;s/K/ KB/;s/M/ MB/;s/G/ GB/' | paste -sd ' ' -)
-    total_reclaimable_after=$(echo $after_df | awk '{s=0; for(i=1;i<=NF;i++) { if($i ~ /GB/) s+=$(i)*1024*1024*1024; else if($i ~ /MB/) s+=$(i)*1024*1024; else if($i ~ /KB/) s+=$(i)*1024; else if($i ~ /B/) s+=$(i); } print s }' i="$i")
-    reclaimed_bytes=$((total_reclaimable_before - total_reclaimable_after))
-    reclaimed_human=$(format_bytes $reclaimed_bytes)
-
-    echo -e "${GREEN}${CHECK} Cleanup finished! Space reclaimed: ${BOLD}${reclaimed_human}${NC}"
+    # FIX: Display the accurate reclaimed space summary
+    echo -e "${GREEN}${CHECK} Cleanup finished! ${BOLD}${reclaimed_space}${NC}"
 }
 
-# Function to view logs with color highlighting - FIXED VERSION
+
+# Function to view logs with color highlighting
 view_logs() {
     print_section "VIEW CONTAINER LOGS"
 
-    # Get all containers
     containers=($(docker ps -a --format "{{.Names}}"))
 
     if [ ${#containers[@]} -eq 0 ]; then
@@ -541,7 +537,6 @@ view_logs() {
     echo -e "${WHITE}${BOLD}Select container:${NC}"
     echo ""
 
-    # List containers with status
     for i in "${!containers[@]}"; do
         container="${containers[$i]}"
         status=$(get_health_status "$container")
@@ -560,7 +555,6 @@ view_logs() {
     if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -gt 0 ] && [ "$choice" -le "${#containers[@]}" ]; then
         container="${containers[$((choice-1))]}"
 
-        # Loop for displaying time range options until user decides to exit
         while true; do
             clear
             echo -e "${CYAN}${BOLD}Logs for: ${container}${NC}"
@@ -583,57 +577,32 @@ view_logs() {
             local header=""
 
             case $time_choice in
-                1) # Last hour
-                    header="Showing logs from last hour:"
-                    log_command="docker logs --since 1h '$container' 2>&1"
-                    ;;
-                2) # Today
-                    header="Showing logs from today:"
-                    log_command="docker logs --since \"$(date '+%Y-%m-%d')T00:00:00\" '$container' 2>&1"
-                    ;;
-                3) # Yesterday
-                    header="Showing logs from yesterday:"
-                    log_command="docker logs --since \"$(date -d yesterday '+%Y-%m-%d')T00:00:00\" --until \"$(date '+%Y-%m-%d')T00:00:00\" '$container' 2>&1"
-                    ;;
-                4) # Last 5 days
-                    header="Showing logs from last 5 days:"
-                    log_command="docker logs --since \"$(date -d '5 days ago' '+%Y-%m-%d')T00:00:00\" '$container' 2>&1"
-                    ;;
-                5) # Last 100 lines
-                    header="Showing last 100 lines:"
-                    log_command="docker logs --tail 100 '$container' 2>&1"
-                    ;;
-                6) # Follow
+                1) header="Showing logs from last hour:"; log_command="docker logs --since 1h '$container' 2>&1";;
+                2) header="Showing logs from today:"; log_command="docker logs --since \"$(date '+%Y-%m-%d')T00:00:00\" '$container' 2>&1";;
+                3) header="Showing logs from yesterday:"; log_command="docker logs --since \"$(date -d yesterday '+%Y-%m-%d')T00:00:00\" --until \"$(date '+%Y-%m-%d')T00:00:00\" '$container' 2>&1";;
+                4) header="Showing logs from last 5 days:"; log_command="docker logs --since \"$(date -d '5 days ago' '+%Y-%m-%d')T00:00:00\" '$container' 2>&1";;
+                5) header="Showing last 100 lines:"; log_command="docker logs --tail 100 '$container' 2>&1";;
+                6)
                     clear
                     echo -e "${BLUE}Following live logs for ${container} (Ctrl+C to stop):${NC}"
                     echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                     echo ""
-                    # Follow command is interactive, handle it separately
                     docker logs -f --tail 50 "$container" 2>&1 | \
                         sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
                         sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
                         sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
                         sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
-                    # After Ctrl+C, the loop will continue, showing the menu again.
                     continue
                     ;;
-                0) # Back to main menu
-                    break # Exit the while loop
-                    ;;
-                *)
-                    echo -e "${RED}Invalid option. Please try again.${NC}"
-                    sleep 2
-                    continue # Go to next loop iteration
-                    ;;
+                0) break;;
+                *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2; continue;;
             esac
 
-            # Execute the selected log command and colorize the output
             if [ -n "$log_command" ]; then
                 clear
                 echo -e "${BLUE}${header}${NC}"
                 echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                 echo ""
-                # Use eval to correctly handle quotes in the command string
                 eval "$log_command" | \
                     sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
                     sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
@@ -647,6 +616,7 @@ view_logs() {
         done
     fi
 }
+
 
 # Show actions menu
 show_actions() {
