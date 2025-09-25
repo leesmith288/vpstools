@@ -124,19 +124,16 @@ get_project_status() {
         done
         
         if [ -n "$compose_file" ]; then
-            # Get services defined
-            local services_defined=$(grep -E "^[[:space:]]*[a-zA-Z0-9_-]+:" "$compose_file" | grep -v "version:" | grep -v "services:" | wc -l)
-            
             # Get running containers for this project
-            local project_containers=$(docker compose ps -q 2>/dev/null | wc -l)
             local running_containers=$(docker compose ps -q --status running 2>/dev/null | wc -l)
+            local total_containers=$(docker compose ps -q 2>/dev/null | wc -l)
             
-            echo "$services_defined|$running_containers|$project_containers"
+            echo "$total_containers|$running_containers"
         else
-            echo "0|0|0"
+            echo "0|0"
         fi
     else
-        echo "0|0|0"
+        echo "0|0"
     fi
 }
 
@@ -205,10 +202,10 @@ main_display() {
             echo -e "${MAGENTA}${BOLD}  ▶ Project: ${project}${NC}"
         fi
         
-        # Table header
-        printf "${WHITE}${BOLD}"
-        printf "    %-25s %-15s %-20s %-10s %-15s\n" "Name" "Status" "Ports" "CPU%" "Memory"
-        printf "${DIM}    ─────────────────────────────────────────────────────────────────────────────────\n${NC}"
+        # Table header with fixed widths
+        printf "    ${WHITE}${BOLD}%-30s %-20s %-25s %-12s %-15s${NC}\n" \
+            "Name" "Status" "Ports" "CPU%" "Memory"
+        printf "    ${DIM}%s${NC}\n" "────────────────────────────────────────────────────────────────────────────────────────────────────"
         
         # Display containers for this project
         IFS='|' read -ra containers <<< "${projects[$project]}"
@@ -230,24 +227,13 @@ main_display() {
                 memory="-"
             fi
             
-            # Get uptime
-            uptime=$(docker inspect --format='{{.State.StartedAt}}' "$container" 2>/dev/null)
-            if [ -n "$uptime" ] && [ "$uptime" != "0001-01-01T00:00:00Z" ]; then
-                uptime_seconds=$(( $(date +%s) - $(date -d "$uptime" +%s) ))
-                if [ $uptime_seconds -gt 86400 ]; then
-                    uptime_str="$((uptime_seconds / 86400))d"
-                elif [ $uptime_seconds -gt 3600 ]; then
-                    uptime_str="$((uptime_seconds / 3600))h"
-                else
-                    uptime_str="$((uptime_seconds / 60))m"
-                fi
-            else
-                uptime_str="-"
-            fi
+            # Truncate long values if needed
+            container_display="${container:0:30}"
+            ports_display="${ports:0:25}"
             
-            # Print container info
-            printf "    %-25s %-15s %-20s %-10s %-15s\n" \
-                "${container:0:25}" "$status" "${ports:0:20}" "$cpu" "$memory"
+            # Print container info with proper alignment
+            printf "    %-30s %-20b %-25s %-12s %-15s\n" \
+                "$container_display" "$status" "$ports_display" "$cpu" "$memory"
         done
         echo ""
     done
@@ -255,9 +241,9 @@ main_display() {
     # Docker Compose Projects
     print_section "DOCKER COMPOSE PROJECTS"
     
-    printf "${WHITE}${BOLD}"
-    printf "  %-30s %-40s %-15s %-10s\n" "Project" "Path" "Containers" "Status"
-    printf "${DIM}  ────────────────────────────────────────────────────────────────────────────────────────\n${NC}"
+    printf "  ${WHITE}${BOLD}%-30s %-40s %-20s %-15s${NC}\n" \
+        "Project" "Path" "Containers" "Status"
+    printf "  ${DIM}%s${NC}\n" "──────────────────────────────────────────────────────────────────────────────────────────────────"
     
     # Find all docker-compose projects
     compose_projects=$(find_compose_projects)
@@ -271,22 +257,21 @@ main_display() {
                 
                 # Get project status
                 status_info=$(get_project_status "$project_dir")
-                IFS='|' read -r defined running total <<< "$status_info"
+                IFS='|' read -r total running <<< "$status_info"
                 
                 # Determine status color and icon
-                if [ "$defined" -eq 0 ]; then
-                    status="${DIM}Invalid${NC}"
-                    status_icon="${CROSS}"
-                    containers_info="${DIM}N/A${NC}"
-                elif [ "$running" -eq "$defined" ] && [ "$running" -gt 0 ]; then
-                    status="${GREEN}Healthy ${CHECK}${NC}"
-                    containers_info="${GREEN}${running}/${defined} running${NC}"
+                if [ "$total" -eq 0 ]; then
+                    status_text="${DIM}No containers${NC}"
+                    containers_info="${DIM}0/0${NC}"
+                elif [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
+                    status_text="${GREEN}Healthy ${CHECK}${NC}"
+                    containers_info="${GREEN}${running}/${total} running${NC}"
                 elif [ "$running" -eq 0 ]; then
-                    status="${RED}Stopped ${CROSS}${NC}"
-                    containers_info="${RED}0/${defined} running${NC}"
+                    status_text="${RED}Stopped ${CROSS}${NC}"
+                    containers_info="${RED}0/${total} stopped${NC}"
                 else
-                    status="${YELLOW}Partial ${WARNING}${NC}"
-                    containers_info="${YELLOW}${running}/${defined} running${NC}"
+                    status_text="${YELLOW}Partial ${WARNING}${NC}"
+                    containers_info="${YELLOW}${running}/${total} running${NC}"
                 fi
                 
                 # Truncate path if too long
@@ -295,11 +280,11 @@ main_display() {
                     display_path="...${display_path: -37}"
                 fi
                 
-                printf "  %-30s %-40s %-15s %s\n" \
+                printf "  %-30s %-40s %-20b %-15b\n" \
                     "${project_name:0:30}" \
                     "${display_path}" \
                     "$containers_info" \
-                    "$status"
+                    "$status_text"
             fi
         done
     fi
@@ -311,39 +296,53 @@ main_display() {
     disk_usage=$(docker system df 2>/dev/null)
     
     if [ -n "$disk_usage" ]; then
-        # Parse disk usage
-        images_size=$(echo "$disk_usage" | grep "Images" | awk '{print $3, $4}')
-        containers_size=$(echo "$disk_usage" | grep "Containers" | awk '{print $3, $4}')
-        volumes_size=$(echo "$disk_usage" | grep "Volumes" | awk '{print $3, $4}')
-        cache_size=$(echo "$disk_usage" | grep "Build Cache" | awk '{print $3, $4}')
+        # Parse disk usage - fixed parsing
+        images_count=$(echo "$disk_usage" | grep "^Images" | awk '{print $2}')
+        images_size=$(echo "$disk_usage" | grep "^Images" | awk '{print $3, $4}')
+        images_reclaim=$(echo "$disk_usage" | grep "^Images" | awk '{print $5, $6}' | tr -d '()')
         
-        # Reclaimable space
-        images_reclaim=$(echo "$disk_usage" | grep "Images" | awk '{print $5, $6}' | tr -d '()')
-        containers_reclaim=$(echo "$disk_usage" | grep "Containers" | awk '{print $5, $6}' | tr -d '()')
-        volumes_reclaim=$(echo "$disk_usage" | grep "Volumes" | awk '{print $5, $6}' | tr -d '()')
-        cache_reclaim=$(echo "$disk_usage" | grep "Build Cache" | awk '{print $5, $6}' | tr -d '()')
+        containers_count=$(echo "$disk_usage" | grep "^Containers" | awk '{print $2}')
+        containers_size=$(echo "$disk_usage" | grep "^Containers" | awk '{print $3, $4}')
+        containers_reclaim=$(echo "$disk_usage" | grep "^Containers" | awk '{print $5, $6}' | tr -d '()')
         
-        # Display with bar graphs
-        echo -e "${BLUE}  Images:${NC}      ${WHITE}${images_size}${NC}"
-        [ -n "$images_reclaim" ] && echo -e "               ${DIM}(${images_reclaim} reclaimable)${NC}"
+        volumes_count=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $3}')
+        volumes_size=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $4, $5}')
+        volumes_reclaim=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $6, $7}' | tr -d '()')
         
-        echo -e "${BLUE}  Containers:${NC}  ${WHITE}${containers_size}${NC}"
-        [ -n "$containers_reclaim" ] && echo -e "               ${DIM}(${containers_reclaim} reclaimable)${NC}"
+        cache_size=$(echo "$disk_usage" | grep "^Build Cache" | awk '{print $3, $4}')
+        cache_reclaim=$(echo "$disk_usage" | grep "^Build Cache" | awk '{print $5, $6}' | tr -d '()')
         
-        echo -e "${BLUE}  Volumes:${NC}     ${WHITE}${volumes_size}${NC}"
-        [ -n "$volumes_reclaim" ] && echo -e "               ${DIM}(${volumes_reclaim} reclaimable)${NC}"
+        # Display with counts
+        echo -e "${BLUE}  Images:${NC}      ${WHITE}${images_count} images, ${images_size}${NC}"
+        [ -n "$images_reclaim" ] && [ "$images_reclaim" != "0B" ] && echo -e "               ${DIM}(${images_reclaim} reclaimable)${NC}"
+        
+        echo -e "${BLUE}  Containers:${NC}  ${WHITE}${containers_count} containers, ${containers_size}${NC}"
+        [ -n "$containers_reclaim" ] && [ "$containers_reclaim" != "0B" ] && echo -e "               ${DIM}(${containers_reclaim} reclaimable)${NC}"
+        
+        echo -e "${BLUE}  Volumes:${NC}     ${WHITE}${volumes_count} volumes, ${volumes_size}${NC}"
+        [ -n "$volumes_reclaim" ] && [ "$volumes_reclaim" != "0B" ] && echo -e "               ${DIM}(${volumes_reclaim} reclaimable)${NC}"
         
         echo -e "${BLUE}  Build Cache:${NC} ${WHITE}${cache_size:-0B}${NC}"
-        [ -n "$cache_reclaim" ] && echo -e "               ${DIM}(${cache_reclaim} reclaimable)${NC}"
+        [ -n "$cache_reclaim" ] && [ "$cache_reclaim" != "0B" ] && echo -e "               ${DIM}(${cache_reclaim} reclaimable)${NC}"
         
         # Total calculation
         echo ""
         echo -e "${DIM}  ─────────────────────────────────────────${NC}"
-        total_size=$(docker system df --format "{{.Size}}" | tail -1)
+        
+        # Calculate total from all components
+        total_line=$(echo "$disk_usage" | grep "^TOTAL")
+        if [ -n "$total_line" ]; then
+            total_size=$(echo "$total_line" | awk '{print $2, $3}')
+            total_reclaim=$(echo "$total_line" | awk '{print $4, $5}' | tr -d '()')
+        else
+            # Fallback calculation
+            total_size=$(docker system df --format "{{.Size}}" | tail -1)
+            total_reclaim=$(docker system df --format "{{.Reclaimable}}" | tail -1)
+        fi
+        
         echo -e "${BLUE}  Total:${NC}       ${WHITE}${total_size}${NC}"
         
         # Show warning if reclaimable space is significant
-        total_reclaim=$(docker system df --format "{{.Reclaimable}}" | tail -1)
         if [ -n "$total_reclaim" ] && [ "$total_reclaim" != "0B" ]; then
             echo ""
             echo -e "${YELLOW}  ${WARNING} ${total_reclaim} can be reclaimed by cleaning${NC}"
@@ -379,18 +378,18 @@ update_project() {
         
         # Get project status
         status_info=$(get_project_status "$project_dir")
-        IFS='|' read -r defined running total <<< "$status_info"
+        IFS='|' read -r total running <<< "$status_info"
         
         # Status indicator
-        if [ "$running" -eq "$defined" ] && [ "$running" -gt 0 ]; then
+        if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
             status_color="${GREEN}"
-            status_text="[${running}/${defined} running]"
+            status_text="[${running}/${total} running]"
         elif [ "$running" -eq 0 ]; then
             status_color="${RED}"
             status_text="[stopped]"
         else
             status_color="${YELLOW}"
-            status_text="[${running}/${defined} running]"
+            status_text="[${running}/${total} running]"
         fi
         
         printf "  ${YELLOW}%2d)${NC} %-25s ${status_color}%-20s${NC} ${DIM}%s${NC}\n" \
@@ -531,7 +530,7 @@ view_logs() {
         status=$(get_health_status "$container")
         project=$(get_compose_project "$container")
         
-        printf "  ${YELLOW}%2d)${NC} %-30s %-15s ${DIM}[%s]${NC}\n" \
+        printf "  ${YELLOW}%2d)${NC} %-30s %-20b ${DIM}[%s]${NC}\n" \
             "$((i+1))" "$container" "$status" "$project"
     done
     
@@ -548,27 +547,39 @@ view_logs() {
         echo -e "${CYAN}${BOLD}Logs for: ${container}${NC}"
         echo ""
         
-        # Time range selection
-        echo -e "${WHITE}${BOLD}Select time range:${NC}"
-        echo -e "  ${YELLOW}1)${NC} Today (default)"
-        echo -e "  ${YELLOW}2)${NC} Yesterday"
-        echo -e "  ${YELLOW}3)${NC} Last 5 days"
-        echo -e "  ${YELLOW}4)${NC} Last 100 lines"
-        echo -e "  ${YELLOW}5)${NC} Follow live"
+        # Show last 1 hour by default
+        echo -e "${BLUE}Showing logs from last hour:${NC}"
+        echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         
-        read -p "$(echo -e ${YELLOW}${BOLD}'Select option (1-5): '${NC})" time_choice
-        
-        # Default to today
-        [ -z "$time_choice" ] && time_choice="1"
+        docker logs --since "1h" "$container" 2>&1 | \
+            sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+            sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+            sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+            sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
         
         echo ""
         echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         
+        # Now offer other time range options
+        echo -e "${WHITE}${BOLD}View different time range?${NC}"
+        echo -e "  ${YELLOW}1)${NC} Today"
+        echo -e "  ${YELLOW}2)${NC} Yesterday"
+        echo -e "  ${YELLOW}3)${NC} Last 5 days"
+        echo -e "  ${YELLOW}4)${NC} Last 100 lines"
+        echo -e "  ${YELLOW}5)${NC} Follow live"
+        echo -e "  ${YELLOW}6)${NC} Continue (skip)"
+        echo ""
+        
+        read -p "$(echo -e ${YELLOW}${BOLD}'Select option (1-6): '${NC})" time_choice
+        
         case $time_choice in
             1) # Today
+                echo ""
                 echo -e "${BLUE}Showing logs from today:${NC}"
+                echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+                echo ""
                 docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
                     sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
                     sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
@@ -576,7 +587,10 @@ view_logs() {
                     sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
                 ;;
             2) # Yesterday
+                echo ""
                 echo -e "${BLUE}Showing logs from yesterday:${NC}"
+                echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+                echo ""
                 docker logs --since "$(date -d yesterday '+%Y-%m-%d')T00:00:00" \
                            --until "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
                     sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
@@ -585,7 +599,10 @@ view_logs() {
                     sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
                 ;;
             3) # Last 5 days
+                echo ""
                 echo -e "${BLUE}Showing logs from last 5 days:${NC}"
+                echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+                echo ""
                 docker logs --since "$(date -d '5 days ago' '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
                     sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
                     sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
@@ -593,7 +610,10 @@ view_logs() {
                     sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
                 ;;
             4) # Last 100 lines
+                echo ""
                 echo -e "${BLUE}Showing last 100 lines:${NC}"
+                echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+                echo ""
                 docker logs --tail 100 "$container" 2>&1 | \
                     sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
                     sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
@@ -601,15 +621,21 @@ view_logs() {
                     sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
                 ;;
             5) # Follow
+                echo ""
                 echo -e "${BLUE}Following live logs (Ctrl+C to stop):${NC}"
+                echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+                echo ""
                 docker logs -f --tail 50 "$container" 2>&1 | \
                     sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
                     sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
                     sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
                     sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
                 ;;
+            6) # Continue
+                # Do nothing, just continue
+                ;;
             *)
-                echo -e "${RED}Invalid option${NC}"
+                # Invalid option or empty, just continue
                 ;;
         esac
         
