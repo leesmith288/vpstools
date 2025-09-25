@@ -234,11 +234,11 @@ main_display() {
                 status="${DIM}${state}${NC}"
             fi
             
-            # Parse ports
+            # Parse ports - fixed to avoid duplicates
             ports_raw="${container_info[${container}_ports]}"
             if [ -n "$ports_raw" ] && [ "$ports_raw" != "<no value>" ]; then
-                # Extract port numbers from the format "0.0.0.0:8080->8080/tcp"
-                ports=$(echo "$ports_raw" | grep -oE '[0-9]+(->[0-9]+)' | grep -oE '^[0-9]+' | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+                # Extract unique port numbers from the format "0.0.0.0:8080->8080/tcp"
+                ports=$(echo "$ports_raw" | grep -oE ':[0-9]+->|^[0-9]+->' | grep -oE '[0-9]+' | sort -u | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
                 [ -z "$ports" ] && ports="-"
             else
                 ports="-"
@@ -306,124 +306,68 @@ main_display() {
         done
     fi
     
-    # Disk Usage Analysis - FIXED VERSION
+    # Disk Usage Analysis - COMPLETELY FIXED VERSION
     print_section "DISK USAGE ANALYSIS"
     
-    # Get disk usage in a more reliable way
     echo -e "${WHITE}${BOLD}  Type          Count    Active    Size         Reclaimable${NC}"
     echo -e "${DIM}  ──────────────────────────────────────────────────────────────${NC}"
     
-    # Parse docker system df output more carefully
-    docker system df 2>/dev/null | tail -n +2 | head -n 4 | while IFS= read -r line; do
-        if [[ "$line" =~ ^Images ]] || [[ "$line" =~ ^Containers ]] || [[ "$line" =~ ^Local\ Volumes ]] || [[ "$line" =~ ^Build\ Cache ]]; then
-            # Extract values from the line
-            type=$(echo "$line" | awk '{print $1}')
-            if [ "$type" = "Local" ]; then
-                type="Volumes"
-                count=$(echo "$line" | awk '{print $3}')
-                active=$(echo "$line" | awk '{print $4}')
-                size=$(echo "$line" | awk '{print $5, $6}')
-                reclaim=$(echo "$line" | awk '{print $7, $8}' | tr -d '()')
-            elif [ "$type" = "Build" ]; then
-                type="Cache"
-                count=$(echo "$line" | awk '{print $3}')
-                active=$(echo "$line" | awk '{print $3}')  # Build cache doesn't have active count
-                size=$(echo "$line" | awk '{print $4, $5}')
-                reclaim=$(echo "$line" | awk '{print $6, $7}' | tr -d '()')
-            else
-                count=$(echo "$line" | awk '{print $2}')
-                active=$(echo "$line" | awk '{print $3}')
-                size=$(echo "$line" | awk '{print $4, $5}')
-                reclaim=$(echo "$line" | awk '{print $6, $7}' | tr -d '()')
-            fi
-            
-            # Format the output
-            [ -z "$reclaim" ] && reclaim="0B"
-            [ -z "$active" ] && active="N/A"
-            
-            # Color code based on type
-            case $type in
-                Images)
-                    type_color="${BLUE}"
-                    ;;
-                Containers)
-                    type_color="${GREEN}"
-                    ;;
-                Volumes)
-                    type_color="${YELLOW}"
-                    ;;
-                Cache)
-                    type_color="${MAGENTA}"
-                    ;;
-                *)
-                    type_color="${WHITE}"
-                    ;;
-            esac
-            
-            printf "  ${type_color}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
-                "$type" "$count" "$active" "$size" "$reclaim"
-        fi
-    done
+    # Get disk usage and parse it properly
+    disk_output=$(docker system df 2>/dev/null)
     
-    # Calculate total properly
+    # Parse each line carefully
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^Images ]]; then
+            count=$(echo "$line" | awk '{print $2}')
+            active=$(echo "$line" | awk '{print $3}')
+            size=$(echo "$line" | awk '{print $4" "$5}')
+            reclaim=$(echo "$line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i}' | sed 's/[()]//g' | xargs)
+            printf "  ${BLUE}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+                "Images" "$count" "$active" "$size" "${reclaim:-0B}"
+        elif [[ "$line" =~ ^Containers ]]; then
+            count=$(echo "$line" | awk '{print $2}')
+            active=$(echo "$line" | awk '{print $3}')
+            size=$(echo "$line" | awk '{print $4" "$5}')
+            reclaim=$(echo "$line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i}' | sed 's/[()]//g' | xargs)
+            printf "  ${GREEN}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+                "Containers" "$count" "$active" "$size" "${reclaim:-0B}"
+        elif [[ "$line" =~ ^Local\ Volumes ]]; then
+            count=$(echo "$line" | awk '{print $3}')
+            active=$(echo "$line" | awk '{print $4}')
+            size=$(echo "$line" | awk '{print $5" "$6}')
+            reclaim=$(echo "$line" | awk '{for(i=7;i<=NF;i++) printf "%s ", $i}' | sed 's/[()]//g' | xargs)
+            printf "  ${YELLOW}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+                "Volumes" "$count" "$active" "$size" "${reclaim:-0B}"
+        elif [[ "$line" =~ ^Build\ Cache ]]; then
+            count=$(echo "$line" | awk '{print $3}')
+            active="N/A"
+            size=$(echo "$line" | awk '{print $4" "$5}')
+            reclaim=$(echo "$line" | awk '{for(i=6;i<=NF;i++) printf "%s ", $i}' | sed 's/[()]//g' | xargs)
+            printf "  ${MAGENTA}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+                "Cache" "$count" "$active" "$size" "${reclaim:-0B}"
+        fi
+    done <<< "$disk_output"
+    
     echo -e "${DIM}  ──────────────────────────────────────────────────────────────${NC}"
     
-    # Get total from docker system df
-    total_output=$(docker system df 2>/dev/null | grep "^TOTAL" || docker system df --format "table" 2>/dev/null | tail -1)
-    
-    if [ -n "$total_output" ]; then
-        # Try to parse TOTAL line if it exists
-        if [[ "$total_output" =~ TOTAL ]]; then
-            total_size=$(echo "$total_output" | awk '{print $2, $3}')
-            total_reclaim=$(echo "$total_output" | awk '{print $4, $5}' | tr -d '()')
-        else
-            # Fallback: sum up individual components
-            total_size=$(docker system df --format "{{.Size}}" 2>/dev/null | paste -sd+ | bc 2>/dev/null || echo "0")
-            if [ "$total_size" != "0" ]; then
-                # Convert bytes to human readable
-                if [ "$total_size" -gt 1073741824 ]; then
-                    total_size=$(echo "scale=2; $total_size / 1073741824" | bc)" GB"
-                elif [ "$total_size" -gt 1048576 ]; then
-                    total_size=$(echo "scale=2; $total_size / 1048576" | bc)" MB"
-                else
-                    total_size="${total_size} B"
-                fi
-            else
-                # Last resort: get from verbose output
-                total_size=$(docker system df -v 2>/dev/null | grep "TOTAL" | awk '{print $2, $3}')
-                [ -z "$total_size" ] && total_size="N/A"
-            fi
-            total_reclaim=$(docker system df --format "{{.Reclaimable}}" 2>/dev/null | tail -1)
-        fi
+    # Calculate total - simplified approach
+    total_line=$(echo "$disk_output" | grep "^TOTAL")
+    if [ -n "$total_line" ]; then
+        total_size=$(echo "$total_line" | awk '{print $2" "$3}')
+        total_reclaim=$(echo "$total_line" | awk '{for(i=4;i<=NF;i++) printf "%s ", $i}' | sed 's/[()]//g' | xargs)
     else
-        total_size="N/A"
-        total_reclaim="0B"
+        # Fallback: manually calculate
+        total_size="See above"
+        total_reclaim="See above"
     fi
     
-    [ -z "$total_reclaim" ] && total_reclaim="0B"
-    
     printf "  ${WHITE}${BOLD}%-13s %-8s %-9s %-12s ${DIM}%s${NC}\n" \
-        "TOTAL" "-" "-" "$total_size" "$total_reclaim"
+        "TOTAL" "-" "-" "${total_size:-N/A}" "${total_reclaim:-0B}"
     
-    # Show warning if reclaimable space is significant
-    if [ -n "$total_reclaim" ] && [ "$total_reclaim" != "0B" ] && [ "$total_reclaim" != "0" ]; then
-        # Check if reclaimable is more than 100MB
-        reclaim_value=$(echo "$total_reclaim" | grep -oE '[0-9.]+' | head -1)
-        reclaim_unit=$(echo "$total_reclaim" | grep -oE '[A-Z]+' | head -1)
-        
-        show_warning=false
-        if [ "$reclaim_unit" = "GB" ]; then
-            show_warning=true
-        elif [ "$reclaim_unit" = "MB" ]; then
-            if (( $(echo "$reclaim_value > 100" | bc -l) )); then
-                show_warning=true
-            fi
-        fi
-        
-        if [ "$show_warning" = true ]; then
-            echo ""
-            echo -e "${YELLOW}  ${WARNING} ${total_reclaim} can be reclaimed by cleaning${NC}"
-        fi
+    # Show warning if significant reclaimable space
+    if [[ "$total_reclaim" =~ [0-9]+(\.[0-9]+)?GB ]] || [[ "$total_reclaim" =~ [0-9]{3,}MB ]]; then
+        echo ""
+        echo -e "${YELLOW}  ${WARNING} ${total_reclaim} can be reclaimed by cleaning${NC}"
     fi
 }
 
@@ -586,7 +530,7 @@ clean_docker() {
     fi
 }
 
-# Function to view logs with color highlighting
+# Function to view logs with color highlighting - FIXED VERSION
 view_logs() {
     print_section "VIEW CONTAINER LOGS"
     
@@ -624,16 +568,17 @@ view_logs() {
         echo -e "${CYAN}${BOLD}Logs for: ${container}${NC}"
         echo ""
         
-        # Show last 1 hour by default
+        # Show last 1 hour by default - with FIXED coloring
         echo -e "${BLUE}Showing logs from last hour:${NC}"
         echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         
+        # Fixed color highlighting - proper regex patterns
         docker logs --since "1h" "$container" 2>&1 | \
-            sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-            sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-            sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-            sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+            sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+            sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+            sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+            sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
         
         echo ""
         echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
@@ -658,10 +603,10 @@ view_logs() {
                 echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
-                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                    sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
                 ;;
             2) # Yesterday
                 echo ""
@@ -670,10 +615,10 @@ view_logs() {
                 echo ""
                 docker logs --since "$(date -d yesterday '+%Y-%m-%d')T00:00:00" \
                            --until "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
-                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                    sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
                 ;;
             3) # Last 5 days
                 echo ""
@@ -681,10 +626,10 @@ view_logs() {
                 echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 docker logs --since "$(date -d '5 days ago' '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
-                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                    sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
                 ;;
             4) # Last 100 lines
                 echo ""
@@ -692,10 +637,10 @@ view_logs() {
                 echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 docker logs --tail 100 "$container" 2>&1 | \
-                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                    sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
                 ;;
             5) # Follow
                 echo ""
@@ -703,10 +648,10 @@ view_logs() {
                 echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
                 echo ""
                 docker logs -f --tail 50 "$container" 2>&1 | \
-                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
-                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
-                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
-                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                    sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(WARNING|warning|Warning|WARN|warn|Warn)\b/$(printf '\033[1;93m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
+                    sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
                 ;;
             6) # Continue
                 # Do nothing, just continue
