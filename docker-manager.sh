@@ -68,26 +68,29 @@ format_bytes() {
     fi
 }
 
-# Function to get container health status with color
+# Function to get container health status with color (simplified for speed)
 get_health_status() {
     local container=$1
-    local health=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null)
     local state=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
     
-    if [ "$health" = "healthy" ]; then
-        echo -e "${GREEN}Healthy${NC}"
-    elif [ "$health" = "unhealthy" ]; then
-        echo -e "${RED}Unhealthy${NC}"
-    elif [ "$health" = "starting" ]; then
-        echo -e "${YELLOW}Starting${NC}"
-    elif [ "$state" = "running" ]; then
-        echo -e "${GREEN}Running${NC}"
+    if [ "$state" = "running" ]; then
+        # Check if container has health check
+        local health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null)
+        if [ "$health" = "healthy" ]; then
+            echo -e "${GREEN}Healthy${NC}"
+        elif [ "$health" = "unhealthy" ]; then
+            echo -e "${RED}Unhealthy${NC}"
+        elif [ "$health" = "starting" ]; then
+            echo -e "${YELLOW}Starting${NC}"
+        else
+            echo -e "${GREEN}Running${NC}"
+        fi
     elif [ "$state" = "exited" ]; then
         echo -e "${RED}Stopped${NC}"
     elif [ "$state" = "restarting" ]; then
         echo -e "${YELLOW}Restarting${NC}"
     else
-        echo -e "${DIM}$state${NC}"
+        echo -e "${DIM}${state}${NC}"
     fi
 }
 
@@ -174,24 +177,31 @@ main_display() {
     echo -e "${BLUE}  Images:${NC} ${WHITE}${total_images}${NC}"
     echo -e "${BLUE}  Volumes:${NC} ${WHITE}${total_volumes}${NC}"
     
-    # All Containers (Grouped by Docker Compose Project)
+    # All Containers (Grouped by Docker Compose Project) - FASTER VERSION
     print_section "ALL CONTAINERS (Grouped by Project)"
     
     # Get all containers with their projects
     declare -A projects
-    declare -A project_containers
+    declare -A container_info
     
-    # First, get all containers
-    while IFS= read -r container; do
-        if [ -n "$container" ]; then
-            project=$(get_compose_project "$container")
-            if [ -z "${projects[$project]}" ]; then
-                projects[$project]="$container"
-            else
-                projects[$project]="${projects[$project]}|$container"
+    # First, get all containers and their basic info in one go
+    while IFS='|' read -r name project state ports; do
+        if [ -n "$name" ]; then
+            if [ -z "$project" ] || [ "$project" = "<no value>" ]; then
+                project="standalone"
             fi
+            
+            if [ -z "${projects[$project]}" ]; then
+                projects[$project]="$name"
+            else
+                projects[$project]="${projects[$project]}:$name"
+            fi
+            
+            # Store container info for later use
+            container_info["${name}_state"]="$state"
+            container_info["${name}_ports"]="$ports"
         fi
-    done < <(docker ps -a --format "{{.Names}}")
+    done < <(docker ps -a --format "{{.Names}}|{{.Label \"com.docker.compose.project\"}}|{{.State}}|{{.Ports}}")
     
     # Display containers grouped by project
     for project in $(echo "${!projects[@]}" | tr ' ' '\n' | sort); do
@@ -203,28 +213,35 @@ main_display() {
         fi
         
         # Table header with fixed widths
-        printf "    ${WHITE}${BOLD}%-30s %-20s %-25s %-12s %-15s${NC}\n" \
-            "Name" "Status" "Ports" "CPU%" "Memory"
-        printf "    ${DIM}%s${NC}\n" "────────────────────────────────────────────────────────────────────────────────────────────────────"
+        printf "    ${WHITE}${BOLD}%-30s %-20s %-25s${NC}\n" \
+            "Name" "Status" "Ports"
+        printf "    ${DIM}%s${NC}\n" "──────────────────────────────────────────────────────────────────"
         
         # Display containers for this project
-        IFS='|' read -ra containers <<< "${projects[$project]}"
+        IFS=':' read -ra containers <<< "${projects[$project]}"
         for container in "${containers[@]}"; do
-            # Get container stats
-            status=$(get_health_status "$container")
+            # Get stored state
+            state="${container_info[${container}_state]}"
             
-            # Get ports
-            ports=$(docker port "$container" 2>/dev/null | awk '{print $3}' | cut -d: -f2 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
-            [ -z "$ports" ] && ports="-"
-            
-            # Get resource usage
-            stats=$(docker stats --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}" "$container" 2>/dev/null)
-            if [ -n "$stats" ]; then
-                cpu=$(echo "$stats" | cut -d'|' -f1)
-                memory=$(echo "$stats" | cut -d'|' -f2 | awk '{print $1}')
+            # Convert state to colored status
+            if [ "$state" = "running" ]; then
+                status="${GREEN}Running${NC}"
+            elif [ "$state" = "exited" ]; then
+                status="${RED}Stopped${NC}"
+            elif [ "$state" = "restarting" ]; then
+                status="${YELLOW}Restarting${NC}"
             else
-                cpu="-"
-                memory="-"
+                status="${DIM}${state}${NC}"
+            fi
+            
+            # Parse ports
+            ports_raw="${container_info[${container}_ports]}"
+            if [ -n "$ports_raw" ] && [ "$ports_raw" != "<no value>" ]; then
+                # Extract port numbers from the format "0.0.0.0:8080->8080/tcp"
+                ports=$(echo "$ports_raw" | grep -oE '[0-9]+(->[0-9]+)' | grep -oE '^[0-9]+' | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+                [ -z "$ports" ] && ports="-"
+            else
+                ports="-"
             fi
             
             # Truncate long values if needed
@@ -232,8 +249,8 @@ main_display() {
             ports_display="${ports:0:25}"
             
             # Print container info with proper alignment
-            printf "    %-30s %-20b %-25s %-12s %-15s\n" \
-                "$container_display" "$status" "$ports_display" "$cpu" "$memory"
+            printf "    %-30s %-20b %-25s\n" \
+                "$container_display" "$status" "$ports_display"
         done
         echo ""
     done
@@ -289,61 +306,121 @@ main_display() {
         done
     fi
     
-    # Disk Usage Analysis
+    # Disk Usage Analysis - FIXED VERSION
     print_section "DISK USAGE ANALYSIS"
     
-    # Get disk usage
-    disk_usage=$(docker system df 2>/dev/null)
+    # Get disk usage in a more reliable way
+    echo -e "${WHITE}${BOLD}  Type          Count    Active    Size         Reclaimable${NC}"
+    echo -e "${DIM}  ──────────────────────────────────────────────────────────────${NC}"
     
-    if [ -n "$disk_usage" ]; then
-        # Parse disk usage - fixed parsing
-        images_count=$(echo "$disk_usage" | grep "^Images" | awk '{print $2}')
-        images_size=$(echo "$disk_usage" | grep "^Images" | awk '{print $3, $4}')
-        images_reclaim=$(echo "$disk_usage" | grep "^Images" | awk '{print $5, $6}' | tr -d '()')
-        
-        containers_count=$(echo "$disk_usage" | grep "^Containers" | awk '{print $2}')
-        containers_size=$(echo "$disk_usage" | grep "^Containers" | awk '{print $3, $4}')
-        containers_reclaim=$(echo "$disk_usage" | grep "^Containers" | awk '{print $5, $6}' | tr -d '()')
-        
-        volumes_count=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $3}')
-        volumes_size=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $4, $5}')
-        volumes_reclaim=$(echo "$disk_usage" | grep "^Local Volumes" | awk '{print $6, $7}' | tr -d '()')
-        
-        cache_size=$(echo "$disk_usage" | grep "^Build Cache" | awk '{print $3, $4}')
-        cache_reclaim=$(echo "$disk_usage" | grep "^Build Cache" | awk '{print $5, $6}' | tr -d '()')
-        
-        # Display with counts
-        echo -e "${BLUE}  Images:${NC}      ${WHITE}${images_count} images, ${images_size}${NC}"
-        [ -n "$images_reclaim" ] && [ "$images_reclaim" != "0B" ] && echo -e "               ${DIM}(${images_reclaim} reclaimable)${NC}"
-        
-        echo -e "${BLUE}  Containers:${NC}  ${WHITE}${containers_count} containers, ${containers_size}${NC}"
-        [ -n "$containers_reclaim" ] && [ "$containers_reclaim" != "0B" ] && echo -e "               ${DIM}(${containers_reclaim} reclaimable)${NC}"
-        
-        echo -e "${BLUE}  Volumes:${NC}     ${WHITE}${volumes_count} volumes, ${volumes_size}${NC}"
-        [ -n "$volumes_reclaim" ] && [ "$volumes_reclaim" != "0B" ] && echo -e "               ${DIM}(${volumes_reclaim} reclaimable)${NC}"
-        
-        echo -e "${BLUE}  Build Cache:${NC} ${WHITE}${cache_size:-0B}${NC}"
-        [ -n "$cache_reclaim" ] && [ "$cache_reclaim" != "0B" ] && echo -e "               ${DIM}(${cache_reclaim} reclaimable)${NC}"
-        
-        # Total calculation
-        echo ""
-        echo -e "${DIM}  ─────────────────────────────────────────${NC}"
-        
-        # Calculate total from all components
-        total_line=$(echo "$disk_usage" | grep "^TOTAL")
-        if [ -n "$total_line" ]; then
-            total_size=$(echo "$total_line" | awk '{print $2, $3}')
-            total_reclaim=$(echo "$total_line" | awk '{print $4, $5}' | tr -d '()')
+    # Parse docker system df output more carefully
+    docker system df 2>/dev/null | tail -n +2 | head -n 4 | while IFS= read -r line; do
+        if [[ "$line" =~ ^Images ]] || [[ "$line" =~ ^Containers ]] || [[ "$line" =~ ^Local\ Volumes ]] || [[ "$line" =~ ^Build\ Cache ]]; then
+            # Extract values from the line
+            type=$(echo "$line" | awk '{print $1}')
+            if [ "$type" = "Local" ]; then
+                type="Volumes"
+                count=$(echo "$line" | awk '{print $3}')
+                active=$(echo "$line" | awk '{print $4}')
+                size=$(echo "$line" | awk '{print $5, $6}')
+                reclaim=$(echo "$line" | awk '{print $7, $8}' | tr -d '()')
+            elif [ "$type" = "Build" ]; then
+                type="Cache"
+                count=$(echo "$line" | awk '{print $3}')
+                active=$(echo "$line" | awk '{print $3}')  # Build cache doesn't have active count
+                size=$(echo "$line" | awk '{print $4, $5}')
+                reclaim=$(echo "$line" | awk '{print $6, $7}' | tr -d '()')
+            else
+                count=$(echo "$line" | awk '{print $2}')
+                active=$(echo "$line" | awk '{print $3}')
+                size=$(echo "$line" | awk '{print $4, $5}')
+                reclaim=$(echo "$line" | awk '{print $6, $7}' | tr -d '()')
+            fi
+            
+            # Format the output
+            [ -z "$reclaim" ] && reclaim="0B"
+            [ -z "$active" ] && active="N/A"
+            
+            # Color code based on type
+            case $type in
+                Images)
+                    type_color="${BLUE}"
+                    ;;
+                Containers)
+                    type_color="${GREEN}"
+                    ;;
+                Volumes)
+                    type_color="${YELLOW}"
+                    ;;
+                Cache)
+                    type_color="${MAGENTA}"
+                    ;;
+                *)
+                    type_color="${WHITE}"
+                    ;;
+            esac
+            
+            printf "  ${type_color}%-13s${NC} %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+                "$type" "$count" "$active" "$size" "$reclaim"
+        fi
+    done
+    
+    # Calculate total properly
+    echo -e "${DIM}  ──────────────────────────────────────────────────────────────${NC}"
+    
+    # Get total from docker system df
+    total_output=$(docker system df 2>/dev/null | grep "^TOTAL" || docker system df --format "table" 2>/dev/null | tail -1)
+    
+    if [ -n "$total_output" ]; then
+        # Try to parse TOTAL line if it exists
+        if [[ "$total_output" =~ TOTAL ]]; then
+            total_size=$(echo "$total_output" | awk '{print $2, $3}')
+            total_reclaim=$(echo "$total_output" | awk '{print $4, $5}' | tr -d '()')
         else
-            # Fallback calculation
-            total_size=$(docker system df --format "{{.Size}}" | tail -1)
-            total_reclaim=$(docker system df --format "{{.Reclaimable}}" | tail -1)
+            # Fallback: sum up individual components
+            total_size=$(docker system df --format "{{.Size}}" 2>/dev/null | paste -sd+ | bc 2>/dev/null || echo "0")
+            if [ "$total_size" != "0" ]; then
+                # Convert bytes to human readable
+                if [ "$total_size" -gt 1073741824 ]; then
+                    total_size=$(echo "scale=2; $total_size / 1073741824" | bc)" GB"
+                elif [ "$total_size" -gt 1048576 ]; then
+                    total_size=$(echo "scale=2; $total_size / 1048576" | bc)" MB"
+                else
+                    total_size="${total_size} B"
+                fi
+            else
+                # Last resort: get from verbose output
+                total_size=$(docker system df -v 2>/dev/null | grep "TOTAL" | awk '{print $2, $3}')
+                [ -z "$total_size" ] && total_size="N/A"
+            fi
+            total_reclaim=$(docker system df --format "{{.Reclaimable}}" 2>/dev/null | tail -1)
+        fi
+    else
+        total_size="N/A"
+        total_reclaim="0B"
+    fi
+    
+    [ -z "$total_reclaim" ] && total_reclaim="0B"
+    
+    printf "  ${WHITE}${BOLD}%-13s %-8s %-9s %-12s ${DIM}%s${NC}\n" \
+        "TOTAL" "-" "-" "$total_size" "$total_reclaim"
+    
+    # Show warning if reclaimable space is significant
+    if [ -n "$total_reclaim" ] && [ "$total_reclaim" != "0B" ] && [ "$total_reclaim" != "0" ]; then
+        # Check if reclaimable is more than 100MB
+        reclaim_value=$(echo "$total_reclaim" | grep -oE '[0-9.]+' | head -1)
+        reclaim_unit=$(echo "$total_reclaim" | grep -oE '[A-Z]+' | head -1)
+        
+        show_warning=false
+        if [ "$reclaim_unit" = "GB" ]; then
+            show_warning=true
+        elif [ "$reclaim_unit" = "MB" ]; then
+            if (( $(echo "$reclaim_value > 100" | bc -l) )); then
+                show_warning=true
+            fi
         fi
         
-        echo -e "${BLUE}  Total:${NC}       ${WHITE}${total_size}${NC}"
-        
-        # Show warning if reclaimable space is significant
-        if [ -n "$total_reclaim" ] && [ "$total_reclaim" != "0B" ]; then
+        if [ "$show_warning" = true ]; then
             echo ""
             echo -e "${YELLOW}  ${WARNING} ${total_reclaim} can be reclaimed by cleaning${NC}"
         fi
