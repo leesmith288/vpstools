@@ -1,822 +1,706 @@
 #!/bin/bash
-# Docker Manager - Part of VPS Tools Suite
+# Docker Manager Script - Enhanced Version
+# Immediate display of all containers, projects, and disk usage
+# Part of VPS Security Tools Suite
 # Host as: docker-manager.sh
 
-# Colors - High contrast for better readability
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
+# Check if Docker is installed and running
+if ! command -v docker &> /dev/null; then
+    echo "❌ Docker is not installed"
+    echo "Please install Docker first"
+    exit 1
+fi
+
+if ! docker info &> /dev/null; then
+    echo "❌ Docker daemon is not running or you don't have permission"
+    echo "Try: sudo systemctl start docker"
+    echo "Or add user to docker group: sudo usermod -aG docker $USER"
+    exit 1
+fi
+
+# Enhanced Colors for Better Visibility
+RED='\033[1;91m'       # Bright Red
+GREEN='\033[1;92m'     # Bright Green  
+YELLOW='\033[1;93m'    # Bright Yellow
+BLUE='\033[1;94m'      # Bright Blue
+CYAN='\033[1;96m'      # Bright Cyan
+MAGENTA='\033[1;95m'   # Bright Magenta
+WHITE='\033[1;97m'     # Bright White
+ORANGE='\033[38;5;208m' # Orange
 BOLD='\033[1m'
 DIM='\033[2m'
-NC='\033[0m'
-BG_GREEN='\033[42m'
-BG_RED='\033[41m'
-BG_YELLOW='\033[43m'
+NC='\033[0m'           # No Color
+BG_RED='\033[41m'      # Red Background
+BG_GREEN='\033[42m'    # Green Background
+BG_YELLOW='\033[43m'   # Yellow Background
 
-# Helper functions for better readability
-print_header() {
-    clear
-    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}${BOLD}              🐳 Docker Update Manager                    ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
-}
+# Unicode symbols
+CHECK="✓"
+CROSS="✗"
+WARNING="⚠"
+INFO="ℹ"
+ARROW="→"
+BULLET="●"
+DOCKER="🐳"
 
+# Function to print section headers
 print_section() {
-    echo -e "\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${GREEN}▶${NC} ${BOLD}$1${NC}"
-    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    echo ""
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}${BOLD}  $1${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
-print_info() {
-    echo -e "${BLUE}ℹ${NC}  ${BOLD}$1${NC}"
-}
-
-print_success() {
-    echo -e "\n${BG_GREEN}${BOLD} ✓ SUCCESS ${NC} ${GREEN}$1${NC}\n"
-}
-
-print_error() {
-    echo -e "\n${BG_RED}${BOLD} ✗ ERROR ${NC} ${RED}$1${NC}\n"
-}
-
-print_warning() {
-    echo -e "\n${BG_YELLOW}${BOLD} ⚠ WARNING ${NC} ${YELLOW}$1${NC}\n"
-}
-
-wait_for_enter() {
-    echo -e "\n${YELLOW}════════════════════════════════════════${NC}"
-    echo -e "${BOLD}Press Enter to continue...${NC}"
-    echo -e "${YELLOW}════════════════════════════════════════${NC}"
-    read
-}
-
-# Format file size for readability
-format_size() {
-    local size=$1
-    if [ $size -gt 1073741824 ]; then
-        echo "$(( size / 1073741824 ))GB"
-    elif [ $size -gt 1048576 ]; then
-        echo "$(( size / 1048576 ))MB"
+# Function to format bytes to human readable
+format_bytes() {
+    local bytes=$1
+    if [ -z "$bytes" ] || [ "$bytes" = "0" ]; then
+        echo "0 B"
+    elif [ $bytes -lt 1024 ]; then
+        echo "${bytes} B"
+    elif [ $bytes -lt 1048576 ]; then
+        echo "$(( bytes / 1024 )) KB"
+    elif [ $bytes -lt 1073741824 ]; then
+        echo "$(( bytes / 1048576 )) MB"
     else
-        echo "$(( size / 1024 ))KB"
+        echo "$(echo "scale=2; $bytes / 1073741824" | bc) GB"
     fi
 }
 
-# Check disk space
-check_disk_space() {
-    local required=$1
-    local path=$2
-    local available=$(df "$path" | tail -1 | awk '{print $4}')
+# Function to get container health status with color
+get_health_status() {
+    local container=$1
+    local health=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null)
+    local state=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
     
-    if [ $available -lt $required ]; then
-        print_warning "Low disk space!"
-        echo -e "${BOLD}Available:${NC} $(format_size $((available * 1024)))"
-        echo -e "${BOLD}Required:${NC}  $(format_size $((required * 1024)))"
-        echo -e "\n${BOLD}Continue anyway? (y/N):${NC} "
-        read -n 1 -r
-        echo
-        [[ ! $REPLY =~ ^[Yy]$ ]] && return 1
-    fi
-    return 0
-}
-
-# Backup functions
-identify_app_type() {
-    local compose_file=$1
-    local app_type="generic"
-    
-    # Check for common applications
-    if grep -qi "vaultwarden\|bitwarden" "$compose_file" 2>/dev/null; then
-        app_type="vaultwarden"
-    elif grep -qi "postgres" "$compose_file" 2>/dev/null; then
-        app_type="postgresql"
-    elif grep -qi "mysql\|mariadb" "$compose_file" 2>/dev/null; then
-        app_type="mysql"
-    elif grep -qi "mongo" "$compose_file" 2>/dev/null; then
-        app_type="mongodb"
-    elif grep -qi "nextcloud" "$compose_file" 2>/dev/null; then
-        app_type="nextcloud"
-    elif grep -qi "gitlab" "$compose_file" 2>/dev/null; then
-        app_type="gitlab"
-    fi
-    
-    echo "$app_type"
-}
-
-search_backup_requirements() {
-    local app_name=$1
-    print_info "Searching for $app_name backup requirements..."
-    
-    # Simulate search results based on app type
-    case $app_name in
-        vaultwarden)
-            echo "Critical files: db.sqlite3, rsa_key.*, attachments/, sends/, config.json"
-            ;;
-        postgresql)
-            echo "Use pg_dump for database export"
-            ;;
-        mysql)
-            echo "Use mysqldump for database export"
-            ;;
-        mongodb)
-            echo "Use mongodump for database export"
-            ;;
-        *)
-            echo "Standard volume backup recommended"
-            ;;
-    esac
-}
-
-analyze_container_data() {
-    local dir=$1
-    local compose_file="$dir/docker-compose.yml"
-    [ ! -f "$compose_file" ] && compose_file="$dir/compose.yml"
-    
-    local container_name=$(grep -m1 "container_name:" "$compose_file" 2>/dev/null | awk '{print $2}' | tr -d '"' || basename "$dir")
-    local app_type=$(identify_app_type "$compose_file")
-    
-    # Get volumes
-    local volumes=$(docker inspect $(docker compose -f "$compose_file" ps -q 2>/dev/null | head -1) 2>/dev/null | jq -r '.[0].Mounts[] | select(.Type == "volume") | .Name' 2>/dev/null)
-    local bind_mounts=$(docker inspect $(docker compose -f "$compose_file" ps -q 2>/dev/null | head -1) 2>/dev/null | jq -r '.[0].Mounts[] | select(.Type == "bind") | .Source' 2>/dev/null)
-    
-    echo "$container_name|$app_type|$volumes|$bind_mounts"
-}
-
-backup_menu() {
-    while true; do
-        print_header
-        print_section "BACKUP & RESTORE"
-        
-        echo -e "${BOLD}Select an option:${NC}\n"
-        echo -e "${YELLOW}  1)${NC} 📦 ${BOLD}Create new backup${NC}"
-        echo -e "${YELLOW}  2)${NC} 📋 ${BOLD}List existing backups${NC}"
-        echo -e "${YELLOW}  3)${NC} 🔄 ${BOLD}Restore from backup${NC}"
-        echo -e "${YELLOW}  4)${NC} 🗑️  ${BOLD}Delete old backups${NC}"
-        echo -e "\n${RED}  0)${NC} ↩️  ${BOLD}Back to main menu${NC}\n"
-        
-        read -p "$(echo -e ${BOLD}Your choice: ${NC})" choice
-        
-        case $choice in
-            1) create_backup ;;
-            2) list_backups ;;
-            3) restore_backup ;;
-            4) delete_backups ;;
-            0) return ;;
-            *) print_error "Invalid option"; sleep 2 ;;
-        esac
-    done
-}
-
-create_backup() {
-    print_header
-    print_section "CREATE NEW BACKUP"
-    
-    # Find all docker compose projects
-    dirs=($(find ~ -type f \( -name "docker-compose.yml" -o -name "compose.yml" \) 2>/dev/null | xargs -I {} dirname {} | sort -u))
-    
-    if [ ${#dirs[@]} -eq 0 ]; then
-        print_error "No Docker Compose projects found!"
-        wait_for_enter
-        return
-    fi
-    
-    # Display projects with details
-    echo -e "${BOLD}Select project to backup:${NC}\n"
-    
-    for i in "${!dirs[@]}"; do
-        dir="${dirs[$i]}"
-        info=$(analyze_container_data "$dir")
-        IFS='|' read -r container_name app_type volumes bind_mounts <<< "$info"
-        
-        # Visual indicator for app type
-        case $app_type in
-            vaultwarden) icon="🔐" ;;
-            postgresql|mysql|mongodb) icon="🗄️" ;;
-            nextcloud) icon="☁️" ;;
-            gitlab) icon="🦊" ;;
-            *) icon="📦" ;;
-        esac
-        
-        printf "${YELLOW}%2d)${NC} ${icon} ${BOLD}%-20s${NC} ${DIM}[%s]${NC}\n" "$((i+1))" "$container_name" "$app_type"
-        printf "    ${DIM}Path: %s${NC}\n" "$dir"
-        
-        # Show what will be backed up
-        [ -n "$volumes" ] && echo -e "    ${CYAN}Volumes:${NC} $(echo $volumes | tr '\n' ', ')"
-        [ -n "$bind_mounts" ] && echo -e "    ${CYAN}Mounts:${NC} $(echo $bind_mounts | tr '\n' ', ')"
-        echo
-    done
-    
-    echo -e "${RED}  0)${NC} Cancel\n"
-    read -p "$(echo -e ${BOLD}Select project number: ${NC})" proj_num
-    
-    if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -gt 0 ] && [ "$proj_num" -le "${#dirs[@]}" ]; then
-        backup_project "${dirs[$((proj_num-1))]}"
+    if [ "$health" = "healthy" ]; then
+        echo -e "${GREEN}Healthy${NC}"
+    elif [ "$health" = "unhealthy" ]; then
+        echo -e "${RED}Unhealthy${NC}"
+    elif [ "$health" = "starting" ]; then
+        echo -e "${YELLOW}Starting${NC}"
+    elif [ "$state" = "running" ]; then
+        echo -e "${GREEN}Running${NC}"
+    elif [ "$state" = "exited" ]; then
+        echo -e "${RED}Stopped${NC}"
+    elif [ "$state" = "restarting" ]; then
+        echo -e "${YELLOW}Restarting${NC}"
+    else
+        echo -e "${DIM}$state${NC}"
     fi
 }
 
-backup_project() {
+# Function to get container's docker-compose project
+get_compose_project() {
+    local container=$1
+    local project=$(docker inspect --format='{{index .Config.Labels "com.docker.compose.project"}}' "$container" 2>/dev/null)
+    echo "${project:-standalone}"
+}
+
+# Function to find all docker-compose projects
+find_compose_projects() {
+    local home_dir="$HOME"
+    find "$home_dir" -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name "compose.yml" -o -name "compose.yaml" \) 2>/dev/null | while read -r file; do
+        echo "$(dirname "$file")"
+    done | sort -u
+}
+
+# Function to get project status
+get_project_status() {
     local project_dir=$1
-    local compose_file="$project_dir/docker-compose.yml"
-    [ ! -f "$compose_file" ] && compose_file="$project_dir/compose.yml"
+    local project_name=$(basename "$project_dir")
     
-    local info=$(analyze_container_data "$project_dir")
-    IFS='|' read -r container_name app_type volumes bind_mounts <<< "$info"
-    
-    print_header
-    print_section "BACKING UP: $container_name"
-    
-    # Search for backup requirements
-    local requirements=$(search_backup_requirements "$app_type")
-    if [ -n "$requirements" ]; then
-        print_info "Backup requirements for $app_type:"
-        echo -e "${CYAN}$requirements${NC}\n"
-    fi
-    
-    # Prepare backup
-    local backup_dir="$project_dir/backups"
-    local timestamp=$(date +%Y%m%d-%H%M%S)
-    local backup_name="${container_name}-${timestamp}"
-    local backup_path="$backup_dir/${backup_name}.tar.gz"
-    
-    # Check disk space (estimate 2x the data size for safety)
-    local data_size=0
-    if [ -n "$volumes" ]; then
-        for vol in $volumes; do
-            size=$(docker system df -v | grep "$vol" | awk '{print $4}' | grep -o '[0-9]*' | head -1)
-            data_size=$((data_size + size * 1024 * 1024))
-        done
-    fi
-    
-    print_info "Estimated backup size: $(format_size $data_size)"
-    
-    if ! check_disk_space $((data_size * 2 / 1024)) "$project_dir"; then
-        return
-    fi
-    
-    # Confirm backup
-    echo -e "\n${BOLD}📁 Backup will include:${NC}"
-    echo -e "   • Docker compose configuration"
-    echo -e "   • Environment files"
-    [ -n "$volumes" ] && echo -e "   • Docker volumes"
-    [ -n "$bind_mounts" ] && echo -e "   • Bind mount directories"
-    
-    echo -e "\n${BOLD}📍 Backup location:${NC}"
-    echo -e "   $backup_path"
-    
-    echo -e "\n${YELLOW}⚠️  Container will be stopped during backup${NC}"
-    echo -e "\n${BOLD}Proceed with backup? (y/N):${NC} "
-    read -n 1 -r
-    echo
-    
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_info "Backup cancelled"
-        wait_for_enter
-        return
-    fi
-    
-    # Create backup directory
-    mkdir -p "$backup_dir"
-    
-    # Perform backup
-    print_info "Starting backup process..."
-    
-    # Stop container
-    echo -e "\n${BOLD}Stopping container...${NC}"
-    cd "$project_dir"
-    docker compose stop
-    
-    # Create temporary backup directory
-    local temp_backup="/tmp/backup-$backup_name"
-    mkdir -p "$temp_backup"
-    
-    # Copy compose files
-    echo -e "${BOLD}Copying configuration files...${NC}"
-    cp -p "$compose_file" "$temp_backup/"
-    [ -f "$project_dir/.env" ] && cp -p "$project_dir/.env" "$temp_backup/"
-    
-    # Backup based on app type
-    case $app_type in
-        vaultwarden)
-            backup_vaultwarden "$temp_backup" "$volumes" "$project_dir"
-            ;;
-        postgresql)
-            backup_postgresql "$temp_backup" "$container_name"
-            ;;
-        mysql)
-            backup_mysql "$temp_backup" "$container_name"
-            ;;
-        mongodb)
-            backup_mongodb "$temp_backup" "$container_name"
-            ;;
-        *)
-            backup_generic "$temp_backup" "$volumes" "$bind_mounts"
-            ;;
-    esac
-    
-    # Create archive
-    echo -e "\n${BOLD}Creating backup archive...${NC}"
-    cd /tmp
-    tar -czf "$backup_path" "backup-$backup_name"
-    
-    # Calculate checksum
-    echo -e "${BOLD}Generating checksum...${NC}"
-    local checksum=$(sha256sum "$backup_path" | awk '{print $1}')
-    echo "$checksum" > "$backup_path.sha256"
-    
-    # Cleanup
-    rm -rf "$temp_backup"
-    
-    # Restart container
-    echo -e "\n${BOLD}Restarting container...${NC}"
-    cd "$project_dir"
-    docker compose up -d
-    
-    # Show results
-    local final_size=$(stat -f%z "$backup_path" 2>/dev/null || stat -c%s "$backup_path" 2>/dev/null)
-    
-    print_success "Backup completed successfully!"
-    
-    echo -e "${BOLD}📦 Backup Details:${NC}"
-    echo -e "   ${BOLD}File:${NC} $backup_path"
-    echo -e "   ${BOLD}Size:${NC} $(format_size $final_size)"
-    echo -e "   ${BOLD}SHA256:${NC} ${checksum:0:16}..."
-    
-    # Offer download
-    echo -e "\n${BOLD}📥 Download backup to your computer?${NC}"
-    echo -e "${YELLOW}  1)${NC} Yes - Show download command"
-    echo -e "${YELLOW}  2)${NC} No - I'll download later\n"
-    
-    read -p "$(echo -e ${BOLD}Choice: ${NC})" dl_choice
-    
-    if [ "$dl_choice" = "1" ]; then
-        setup_download "$backup_path"
-    fi
-    
-    wait_for_enter
-}
-
-backup_vaultwarden() {
-    local backup_dir=$1
-    local volumes=$2
-    local project_dir=$3
-    
-    echo -e "${BOLD}Backing up Vaultwarden data...${NC}"
-    
-    # Find data directory
-    local data_dir
-    if [ -d "$project_dir/vw-data" ]; then
-        data_dir="$project_dir/vw-data"
-    elif [ -d "$project_dir/data" ]; then
-        data_dir="$project_dir/data"
-    else
-        # Try to find from volume
-        for vol in $volumes; do
-            local vol_path=$(docker volume inspect "$vol" | jq -r '.[0].Mountpoint' 2>/dev/null)
-            if [ -n "$vol_path" ] && [ -d "$vol_path" ]; then
-                data_dir="$vol_path"
+    # Try to get project name from docker-compose
+    cd "$project_dir" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        # Count services defined in compose file
+        local compose_file=""
+        for file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+            if [ -f "$file" ]; then
+                compose_file="$file"
                 break
             fi
         done
-    fi
-    
-    if [ -n "$data_dir" ] && [ -d "$data_dir" ]; then
-        # Backup critical files
-        mkdir -p "$backup_dir/vaultwarden-data"
         
-        # Database
-        [ -f "$data_dir/db.sqlite3" ] && cp -p "$data_dir/db.sqlite3" "$backup_dir/vaultwarden-data/"
-        [ -f "$data_dir/db.sqlite3-wal" ] && cp -p "$data_dir/db.sqlite3-wal" "$backup_dir/vaultwarden-data/"
-        [ -f "$data_dir/db.sqlite3-shm" ] && cp -p "$data_dir/db.sqlite3-shm" "$backup_dir/vaultwarden-data/"
-        
-        # Keys
-        [ -f "$data_dir/rsa_key.pem" ] && cp -p "$data_dir/rsa_key.pem" "$backup_dir/vaultwarden-data/"
-        [ -f "$data_dir/rsa_key.pub.pem" ] && cp -p "$data_dir/rsa_key.pub.pem" "$backup_dir/vaultwarden-data/"
-        
-        # Attachments and sends
-        [ -d "$data_dir/attachments" ] && cp -rp "$data_dir/attachments" "$backup_dir/vaultwarden-data/"
-        [ -d "$data_dir/sends" ] && cp -rp "$data_dir/sends" "$backup_dir/vaultwarden-data/"
-        
-        # Config
-        [ -f "$data_dir/config.json" ] && cp -p "$data_dir/config.json" "$backup_dir/vaultwarden-data/"
-        
-        echo -e "${GREEN}✓${NC} Vaultwarden data backed up"
-    else
-        print_warning "Could not find Vaultwarden data directory"
-    fi
-}
-
-backup_postgresql() {
-    local backup_dir=$1
-    local container=$2
-    
-    # Check if pg_dump is available in container
-    if docker exec "$container" which pg_dump >/dev/null 2>&1; then
-        echo -e "${BOLD}Backing up PostgreSQL database...${NC}"
-        docker exec "$container" pg_dumpall -U postgres > "$backup_dir/postgresql_dump.sql"
-        echo -e "${GREEN}✓${NC} PostgreSQL database backed up"
-    else
-        print_warning "pg_dump not found in container, copying raw data files"
-        backup_generic "$backup_dir" "" ""
-    fi
-}
-
-backup_mysql() {
-    local backup_dir=$1
-    local container=$2
-    
-    # Check if mysqldump is available
-    if docker exec "$container" which mysqldump >/dev/null 2>&1; then
-        echo -e "${BOLD}Backing up MySQL database...${NC}"
-        docker exec "$container" mysqldump --all-databases --single-transaction > "$backup_dir/mysql_dump.sql"
-        echo -e "${GREEN}✓${NC} MySQL database backed up"
-    else
-        print_warning "mysqldump not found in container, copying raw data files"
-        backup_generic "$backup_dir" "" ""
-    fi
-}
-
-backup_mongodb() {
-    local backup_dir=$1
-    local container=$2
-    
-    # Check if mongodump is available
-    if docker exec "$container" which mongodump >/dev/null 2>&1; then
-        echo -e "${BOLD}Backing up MongoDB database...${NC}"
-        mkdir -p "$backup_dir/mongodb_dump"
-        docker exec "$container" mongodump --out /tmp/mongodump
-        docker cp "$container:/tmp/mongodump" "$backup_dir/mongodb_dump"
-        docker exec "$container" rm -rf /tmp/mongodump
-        echo -e "${GREEN}✓${NC} MongoDB database backed up"
-    else
-        print_warning "mongodump not found in container, copying raw data files"
-        backup_generic "$backup_dir" "" ""
-    fi
-}
-
-backup_generic() {
-    local backup_dir=$1
-    local volumes=$2
-    local bind_mounts=$3
-    
-    # Backup volumes
-    if [ -n "$volumes" ]; then
-        echo -e "${BOLD}Backing up Docker volumes...${NC}"
-        mkdir -p "$backup_dir/volumes"
-        
-        for vol in $volumes; do
-            echo -e "  Backing up volume: $vol"
-            docker run --rm -v "$vol:/source:ro" -v "$backup_dir/volumes:/backup" alpine tar -czf "/backup/${vol}.tar.gz" -C /source .
-        done
-        echo -e "${GREEN}✓${NC} Volumes backed up"
-    fi
-    
-    # Backup bind mounts
-    if [ -n "$bind_mounts" ]; then
-        echo -e "${BOLD}Backing up bind mounts...${NC}"
-        mkdir -p "$backup_dir/bind_mounts"
-        
-        for mount in $bind_mounts; do
-            if [ -d "$mount" ]; then
-                mount_name=$(basename "$mount")
-                echo -e "  Backing up mount: $mount_name"
-                tar -czf "$backup_dir/bind_mounts/${mount_name}.tar.gz" -C "$mount" .
-            fi
-        done
-        echo -e "${GREEN}✓${NC} Bind mounts backed up"
-    fi
-}
-
-setup_download() {
-    local backup_path=$1
-    
-    # Check for rsync
-    if ! command -v rsync >/dev/null 2>&1; then
-        echo -e "\n${YELLOW}Rsync not installed (recommended for reliable downloads)${NC}"
-        echo -e "\n${BOLD}Install rsync now?${NC}"
-        echo -e "${YELLOW}  1)${NC} Yes - Install rsync"
-        echo -e "${YELLOW}  2)${NC} No - Use SCP instead\n"
-        
-        read -p "$(echo -e ${BOLD}Choice: ${NC})" install_choice
-        
-        if [ "$install_choice" = "1" ]; then
-            print_info "Installing rsync..."
-            if command -v apt-get >/dev/null 2>&1; then
-                apt-get update && apt-get install -y rsync
-            elif command -v yum >/dev/null 2>&1; then
-                yum install -y rsync
-            fi
+        if [ -n "$compose_file" ]; then
+            # Get services defined
+            local services_defined=$(grep -E "^[[:space:]]*[a-zA-Z0-9_-]+:" "$compose_file" | grep -v "version:" | grep -v "services:" | wc -l)
             
-            if command -v rsync >/dev/null 2>&1; then
-                print_success "Rsync installed successfully!"
+            # Get running containers for this project
+            local project_containers=$(docker compose ps -q 2>/dev/null | wc -l)
+            local running_containers=$(docker compose ps -q --status running 2>/dev/null | wc -l)
+            
+            echo "$services_defined|$running_containers|$project_containers"
+        else
+            echo "0|0|0"
+        fi
+    else
+        echo "0|0|0"
+    fi
+}
+
+# Main display function
+main_display() {
+    clear
+    
+    # Header
+    echo ""
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${WHITE}${BOLD}                 ${DOCKER} DOCKER MANAGER ${DOCKER}                          ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}║${WHITE}  $(date '+%Y-%m-%d %H:%M:%S')                                          ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    
+    # Docker System Status
+    print_section "DOCKER SYSTEM STATUS"
+    
+    # Docker version
+    docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null)
+    compose_version=$(docker compose version --short 2>/dev/null || echo "Not installed")
+    
+    # Container counts
+    total_containers=$(docker ps -aq | wc -l)
+    running_containers=$(docker ps -q | wc -l)
+    stopped_containers=$((total_containers - running_containers))
+    
+    # Image count
+    total_images=$(docker images -q | wc -l)
+    
+    # Volume count
+    total_volumes=$(docker volume ls -q | wc -l)
+    
+    echo -e "${BLUE}  Docker Version:${NC} ${WHITE}${docker_version}${NC}"
+    echo -e "${BLUE}  Compose Version:${NC} ${WHITE}${compose_version}${NC}"
+    echo -e "${BLUE}  Status:${NC} ${GREEN}Running ${CHECK}${NC}"
+    echo ""
+    echo -e "${BLUE}  Containers:${NC} ${GREEN}${running_containers} running${NC}, ${YELLOW}${stopped_containers} stopped${NC} (${WHITE}${total_containers} total${NC})"
+    echo -e "${BLUE}  Images:${NC} ${WHITE}${total_images}${NC}"
+    echo -e "${BLUE}  Volumes:${NC} ${WHITE}${total_volumes}${NC}"
+    
+    # All Containers (Grouped by Docker Compose Project)
+    print_section "ALL CONTAINERS (Grouped by Project)"
+    
+    # Get all containers with their projects
+    declare -A projects
+    declare -A project_containers
+    
+    # First, get all containers
+    while IFS= read -r container; do
+        if [ -n "$container" ]; then
+            project=$(get_compose_project "$container")
+            if [ -z "${projects[$project]}" ]; then
+                projects[$project]="$container"
             else
-                print_error "Failed to install rsync"
+                projects[$project]="${projects[$project]}|$container"
             fi
         fi
-    fi
+    done < <(docker ps -a --format "{{.Names}}")
     
-    # Get server IP
-    local server_ip=$(hostname -I | awk '{print $1}')
-    local username=$(whoami)
-    
-    echo -e "\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BOLD}📥 DOWNLOAD INSTRUCTIONS${NC}"
-    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-    
-    echo -e "${BOLD}Run this command on your Mac/PC:${NC}\n"
-    
-    if command -v rsync >/dev/null 2>&1; then
-        echo -e "${CYAN}rsync -avP --progress ${username}@${server_ip}:${backup_path} ~/Downloads/${NC}"
-    else
-        echo -e "${CYAN}scp ${username}@${server_ip}:${backup_path} ~/Downloads/${NC}"
-    fi
-    
-    echo -e "\n${DIM}💡 Tip: The command above is ready to copy and paste${NC}"
-    echo -e "${DIM}📍 Your backup will be saved to: ~/Downloads/$(basename $backup_path)${NC}"
-}
-
-list_backups() {
-    print_header
-    print_section "EXISTING BACKUPS"
-    
-    local total_size=0
-    local backup_count=0
-    
-    # Find all backup directories
-    while IFS= read -r -d '' backup_dir; do
-        if [ -d "$backup_dir" ] && [ "$(ls -A "$backup_dir"/*.tar.gz 2>/dev/null)" ]; then
-            local project_name=$(basename "$(dirname "$backup_dir")")
-            
-            echo -e "${BOLD}📁 $project_name${NC}"
-            echo -e "${DIM}   Path: $backup_dir${NC}\n"
-            
-            # List backups in this directory
-            for backup in "$backup_dir"/*.tar.gz; do
-                [ -f "$backup" ] || continue
-                
-                local size=$(stat -f%z "$backup" 2>/dev/null || stat -c%s "$backup" 2>/dev/null)
-                local date=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$backup" 2>/dev/null || stat -c "%y" "$backup" 2>/dev/null | cut -d' ' -f1,2)
-                
-                printf "   ${YELLOW}•${NC} %-40s ${BOLD}%8s${NC} ${DIM}%s${NC}\n" "$(basename "$backup")" "$(format_size $size)" "$date"
-                
-                total_size=$((total_size + size))
-                backup_count=$((backup_count + 1))
-            done
-            echo
+    # Display containers grouped by project
+    for project in $(echo "${!projects[@]}" | tr ' ' '\n' | sort); do
+        # Project header
+        if [ "$project" = "standalone" ]; then
+            echo -e "${MAGENTA}${BOLD}  ▶ Standalone Containers${NC}"
+        else
+            echo -e "${MAGENTA}${BOLD}  ▶ Project: ${project}${NC}"
         fi
-    done < <(find ~ -type d -name "backups" -print0 2>/dev/null)
+        
+        # Table header
+        printf "${WHITE}${BOLD}"
+        printf "    %-25s %-15s %-20s %-10s %-15s\n" "Name" "Status" "Ports" "CPU%" "Memory"
+        printf "${DIM}    ─────────────────────────────────────────────────────────────────────────────────\n${NC}"
+        
+        # Display containers for this project
+        IFS='|' read -ra containers <<< "${projects[$project]}"
+        for container in "${containers[@]}"; do
+            # Get container stats
+            status=$(get_health_status "$container")
+            
+            # Get ports
+            ports=$(docker port "$container" 2>/dev/null | awk '{print $3}' | cut -d: -f2 | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+            [ -z "$ports" ] && ports="-"
+            
+            # Get resource usage
+            stats=$(docker stats --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}" "$container" 2>/dev/null)
+            if [ -n "$stats" ]; then
+                cpu=$(echo "$stats" | cut -d'|' -f1)
+                memory=$(echo "$stats" | cut -d'|' -f2 | awk '{print $1}')
+            else
+                cpu="-"
+                memory="-"
+            fi
+            
+            # Get uptime
+            uptime=$(docker inspect --format='{{.State.StartedAt}}' "$container" 2>/dev/null)
+            if [ -n "$uptime" ] && [ "$uptime" != "0001-01-01T00:00:00Z" ]; then
+                uptime_seconds=$(( $(date +%s) - $(date -d "$uptime" +%s) ))
+                if [ $uptime_seconds -gt 86400 ]; then
+                    uptime_str="$((uptime_seconds / 86400))d"
+                elif [ $uptime_seconds -gt 3600 ]; then
+                    uptime_str="$((uptime_seconds / 3600))h"
+                else
+                    uptime_str="$((uptime_seconds / 60))m"
+                fi
+            else
+                uptime_str="-"
+            fi
+            
+            # Print container info
+            printf "    %-25s %-15s %-20s %-10s %-15s\n" \
+                "${container:0:25}" "$status" "${ports:0:20}" "$cpu" "$memory"
+        done
+        echo ""
+    done
     
-    if [ $backup_count -eq 0 ]; then
-        print_info "No backups found"
+    # Docker Compose Projects
+    print_section "DOCKER COMPOSE PROJECTS"
+    
+    printf "${WHITE}${BOLD}"
+    printf "  %-30s %-40s %-15s %-10s\n" "Project" "Path" "Containers" "Status"
+    printf "${DIM}  ────────────────────────────────────────────────────────────────────────────────────────\n${NC}"
+    
+    # Find all docker-compose projects
+    compose_projects=$(find_compose_projects)
+    
+    if [ -z "$compose_projects" ]; then
+        echo -e "${DIM}  No docker-compose projects found${NC}"
     else
-        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${BOLD}Total: $backup_count backups, $(format_size $total_size)${NC}"
+        echo "$compose_projects" | while read -r project_dir; do
+            if [ -n "$project_dir" ]; then
+                project_name=$(basename "$project_dir")
+                
+                # Get project status
+                status_info=$(get_project_status "$project_dir")
+                IFS='|' read -r defined running total <<< "$status_info"
+                
+                # Determine status color and icon
+                if [ "$defined" -eq 0 ]; then
+                    status="${DIM}Invalid${NC}"
+                    status_icon="${CROSS}"
+                    containers_info="${DIM}N/A${NC}"
+                elif [ "$running" -eq "$defined" ] && [ "$running" -gt 0 ]; then
+                    status="${GREEN}Healthy ${CHECK}${NC}"
+                    containers_info="${GREEN}${running}/${defined} running${NC}"
+                elif [ "$running" -eq 0 ]; then
+                    status="${RED}Stopped ${CROSS}${NC}"
+                    containers_info="${RED}0/${defined} running${NC}"
+                else
+                    status="${YELLOW}Partial ${WARNING}${NC}"
+                    containers_info="${YELLOW}${running}/${defined} running${NC}"
+                fi
+                
+                # Truncate path if too long
+                display_path="$project_dir"
+                if [ ${#display_path} -gt 40 ]; then
+                    display_path="...${display_path: -37}"
+                fi
+                
+                printf "  %-30s %-40s %-15s %s\n" \
+                    "${project_name:0:30}" \
+                    "${display_path}" \
+                    "$containers_info" \
+                    "$status"
+            fi
+        done
     fi
     
-    wait_for_enter
+    # Disk Usage Analysis
+    print_section "DISK USAGE ANALYSIS"
+    
+    # Get disk usage
+    disk_usage=$(docker system df 2>/dev/null)
+    
+    if [ -n "$disk_usage" ]; then
+        # Parse disk usage
+        images_size=$(echo "$disk_usage" | grep "Images" | awk '{print $3, $4}')
+        containers_size=$(echo "$disk_usage" | grep "Containers" | awk '{print $3, $4}')
+        volumes_size=$(echo "$disk_usage" | grep "Volumes" | awk '{print $3, $4}')
+        cache_size=$(echo "$disk_usage" | grep "Build Cache" | awk '{print $3, $4}')
+        
+        # Reclaimable space
+        images_reclaim=$(echo "$disk_usage" | grep "Images" | awk '{print $5, $6}' | tr -d '()')
+        containers_reclaim=$(echo "$disk_usage" | grep "Containers" | awk '{print $5, $6}' | tr -d '()')
+        volumes_reclaim=$(echo "$disk_usage" | grep "Volumes" | awk '{print $5, $6}' | tr -d '()')
+        cache_reclaim=$(echo "$disk_usage" | grep "Build Cache" | awk '{print $5, $6}' | tr -d '()')
+        
+        # Display with bar graphs
+        echo -e "${BLUE}  Images:${NC}      ${WHITE}${images_size}${NC}"
+        [ -n "$images_reclaim" ] && echo -e "               ${DIM}(${images_reclaim} reclaimable)${NC}"
+        
+        echo -e "${BLUE}  Containers:${NC}  ${WHITE}${containers_size}${NC}"
+        [ -n "$containers_reclaim" ] && echo -e "               ${DIM}(${containers_reclaim} reclaimable)${NC}"
+        
+        echo -e "${BLUE}  Volumes:${NC}     ${WHITE}${volumes_size}${NC}"
+        [ -n "$volumes_reclaim" ] && echo -e "               ${DIM}(${volumes_reclaim} reclaimable)${NC}"
+        
+        echo -e "${BLUE}  Build Cache:${NC} ${WHITE}${cache_size:-0B}${NC}"
+        [ -n "$cache_reclaim" ] && echo -e "               ${DIM}(${cache_reclaim} reclaimable)${NC}"
+        
+        # Total calculation
+        echo ""
+        echo -e "${DIM}  ─────────────────────────────────────────${NC}"
+        total_size=$(docker system df --format "{{.Size}}" | tail -1)
+        echo -e "${BLUE}  Total:${NC}       ${WHITE}${total_size}${NC}"
+        
+        # Show warning if reclaimable space is significant
+        total_reclaim=$(docker system df --format "{{.Reclaimable}}" | tail -1)
+        if [ -n "$total_reclaim" ] && [ "$total_reclaim" != "0B" ]; then
+            echo ""
+            echo -e "${YELLOW}  ${WARNING} ${total_reclaim} can be reclaimed by cleaning${NC}"
+        fi
+    fi
 }
 
-delete_backups() {
-    print_header
-    print_section "DELETE OLD BACKUPS"
+# Function to update a project
+update_project() {
+    print_section "UPDATE DOCKER PROJECT"
     
-    # Find all backups
-    local backups=()
-    while IFS= read -r -d '' backup; do
-        backups+=("$backup")
-    done < <(find ~ -type f -name "*.tar.gz" -path "*/backups/*" -print0 2>/dev/null | sort -z)
+    # Find all docker-compose projects
+    compose_projects=$(find_compose_projects)
     
-    if [ ${#backups[@]} -eq 0 ]; then
-        print_info "No backups found"
-        wait_for_enter
+    if [ -z "$compose_projects" ]; then
+        echo -e "${RED}No docker-compose projects found!${NC}"
         return
     fi
     
-    echo -e "${BOLD}Select backups to delete:${NC}\n"
+    # Create array of projects
+    projects=()
+    while IFS= read -r project; do
+        projects+=("$project")
+    done <<< "$compose_projects"
     
-    # List backups with numbers
-    for i in "${!backups[@]}"; do
-        local backup="${backups[$i]}"
-        local size=$(stat -f%z "$backup" 2>/dev/null || stat -c%s "$backup" 2>/dev/null)
-        local date=$(stat -f "%Sm" -t "%Y-%m-%d" "$backup" 2>/dev/null || stat -c "%y" "$backup" 2>/dev/null | cut -d' ' -f1)
+    echo -e "${WHITE}${BOLD}Select project to update:${NC}"
+    echo ""
+    
+    # List projects
+    for i in "${!projects[@]}"; do
+        project_dir="${projects[$i]}"
+        project_name=$(basename "$project_dir")
         
-        printf "${YELLOW}%3d)${NC} %-40s ${BOLD}%8s${NC} ${DIM}%s${NC}\n" "$((i+1))" "$(basename "$backup")" "$(format_size $size)" "$date"
-    done
-    
-    echo -e "\n${BOLD}Enter backup numbers to delete (space-separated), or 0 to cancel:${NC}"
-    read -p "> " -a selections
-    
-    # Process selections
-    local to_delete=()
-    for sel in "${selections[@]}"; do
-        if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -gt 0 ] && [ "$sel" -le "${#backups[@]}" ]; then
-            to_delete+=("${backups[$((sel-1))]}")
-        elif [ "$sel" = "0" ]; then
-            return
-        fi
-    done
-    
-    if [ ${#to_delete[@]} -gt 0 ]; then
-        echo -e "\n${YELLOW}Delete ${#to_delete[@]} backup(s)?${NC}"
-        echo -e "${BOLD}This action cannot be undone! (y/N):${NC} "
-        read -n 1 -r
-        echo
+        # Get project status
+        status_info=$(get_project_status "$project_dir")
+        IFS='|' read -r defined running total <<< "$status_info"
         
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            for backup in "${to_delete[@]}"; do
-                rm -f "$backup" "$backup.sha256"
-                echo -e "${GREEN}✓${NC} Deleted: $(basename "$backup")"
-            done
-            print_success "Backups deleted"
+        # Status indicator
+        if [ "$running" -eq "$defined" ] && [ "$running" -gt 0 ]; then
+            status_color="${GREEN}"
+            status_text="[${running}/${defined} running]"
+        elif [ "$running" -eq 0 ]; then
+            status_color="${RED}"
+            status_text="[stopped]"
         else
-            print_info "Deletion cancelled"
+            status_color="${YELLOW}"
+            status_text="[${running}/${defined} running]"
+        fi
+        
+        printf "  ${YELLOW}%2d)${NC} %-25s ${status_color}%-20s${NC} ${DIM}%s${NC}\n" \
+            "$((i+1))" "$project_name" "$status_text" "$project_dir"
+    done
+    
+    echo ""
+    echo -e "  ${RED}0)${NC} Cancel"
+    echo ""
+    
+    read -p "$(echo -e ${YELLOW}${BOLD}'Select project number: '${NC})" choice
+    
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -gt 0 ] && [ "$choice" -le "${#projects[@]}" ]; then
+        project_dir="${projects[$((choice-1))]}"
+        project_name=$(basename "$project_dir")
+        
+        echo ""
+        echo -e "${CYAN}${BOLD}Updating project: ${project_name}${NC}"
+        echo -e "${DIM}Path: ${project_dir}${NC}"
+        echo ""
+        
+        # Change to project directory
+        cd "$project_dir" || return
+        
+        # Show current images
+        echo -e "${BLUE}Current images:${NC}"
+        docker compose images
+        echo ""
+        
+        # Pull latest images
+        echo -e "${YELLOW}Pulling latest images...${NC}"
+        docker compose pull
+        
+        if [ $? -eq 0 ]; then
+            echo ""
+            echo -e "${YELLOW}Recreating containers with new images...${NC}"
+            docker compose up -d
+            
+            if [ $? -eq 0 ]; then
+                echo ""
+                echo -e "${GREEN}${CHECK} Update completed successfully!${NC}"
+                echo ""
+                echo -e "${BLUE}Updated containers:${NC}"
+                docker compose ps
+            else
+                echo -e "${RED}${CROSS} Failed to recreate containers${NC}"
+            fi
+        else
+            echo -e "${RED}${CROSS} Failed to pull images${NC}"
         fi
     fi
-    
-    wait_for_enter
 }
 
-restore_backup() {
-    print_header
-    print_section "RESTORE FROM BACKUP"
+# Function to clean Docker
+clean_docker() {
+    print_section "CLEAN DOCKER SYSTEM"
     
-    print_warning "Restore functionality coming soon!"
-    echo -e "${BOLD}Manual restore instructions:${NC}"
-    echo -e "1. Stop the container: ${CYAN}docker compose down${NC}"
-    echo -e "2. Extract backup: ${CYAN}tar -xzf backup.tar.gz${NC}"
-    echo -e "3. Copy files back to original locations"
-    echo -e "4. Start container: ${CYAN}docker compose up -d${NC}"
+    echo -e "${WHITE}${BOLD}Current disk usage:${NC}"
+    echo ""
+    docker system df
+    echo ""
     
-    wait_for_enter
+    # Show what will be cleaned
+    echo -e "${YELLOW}${BOLD}This will remove (SAFE - Level 1):${NC}"
+    echo -e "  ${BULLET} All stopped containers"
+    echo -e "  ${BULLET} All networks not used by containers"
+    echo -e "  ${BULLET} All dangling images"
+    echo -e "  ${BULLET} All dangling build cache"
+    echo ""
+    echo -e "${GREEN}${INFO} Your volumes and running containers will NOT be affected${NC}"
+    echo ""
+    
+    # Preview what will be deleted
+    echo -e "${BLUE}Preview of items to be removed:${NC}"
+    echo ""
+    
+    # Stopped containers
+    stopped=$(docker ps -a -q -f status=exited | wc -l)
+    if [ "$stopped" -gt 0 ]; then
+        echo -e "${YELLOW}  Stopped containers: ${stopped}${NC}"
+        docker ps -a -f status=exited --format "    - {{.Names}} ({{.Image}})" | head -5
+        [ "$stopped" -gt 5 ] && echo "    ... and $((stopped - 5)) more"
+    fi
+    
+    # Dangling images
+    dangling=$(docker images -f "dangling=true" -q | wc -l)
+    if [ "$dangling" -gt 0 ]; then
+        echo -e "${YELLOW}  Dangling images: ${dangling}${NC}"
+    fi
+    
+    # Unused networks
+    unused_nets=$(docker network ls -q -f "dangling=true" | wc -l)
+    if [ "$unused_nets" -gt 0 ]; then
+        echo -e "${YELLOW}  Unused networks: ${unused_nets}${NC}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}${BOLD}Proceed with cleanup? (y/N):${NC} "
+    read -n 1 -r
+    echo ""
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Cleaning Docker system...${NC}"
+        echo ""
+        
+        # Run cleanup
+        docker system prune -f
+        
+        echo ""
+        echo -e "${GREEN}${CHECK} Cleanup completed!${NC}"
+        echo ""
+        echo -e "${WHITE}${BOLD}New disk usage:${NC}"
+        echo ""
+        docker system df
+    else
+        echo -e "${DIM}Cleanup cancelled${NC}"
+    fi
 }
 
-# Main menu
-docker_menu() {
+# Function to view logs with color highlighting
+view_logs() {
+    print_section "VIEW CONTAINER LOGS"
+    
+    # Get all containers
+    containers=($(docker ps -a --format "{{.Names}}"))
+    
+    if [ ${#containers[@]} -eq 0 ]; then
+        echo -e "${RED}No containers found${NC}"
+        return
+    fi
+    
+    echo -e "${WHITE}${BOLD}Select container:${NC}"
+    echo ""
+    
+    # List containers with status
+    for i in "${!containers[@]}"; do
+        container="${containers[$i]}"
+        status=$(get_health_status "$container")
+        project=$(get_compose_project "$container")
+        
+        printf "  ${YELLOW}%2d)${NC} %-30s %-15s ${DIM}[%s]${NC}\n" \
+            "$((i+1))" "$container" "$status" "$project"
+    done
+    
+    echo ""
+    echo -e "  ${RED}0)${NC} Cancel"
+    echo ""
+    
+    read -p "$(echo -e ${YELLOW}${BOLD}'Select container number: '${NC})" choice
+    
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -gt 0 ] && [ "$choice" -le "${#containers[@]}" ]; then
+        container="${containers[$((choice-1))]}"
+        
+        echo ""
+        echo -e "${CYAN}${BOLD}Logs for: ${container}${NC}"
+        echo ""
+        
+        # Time range selection
+        echo -e "${WHITE}${BOLD}Select time range:${NC}"
+        echo -e "  ${YELLOW}1)${NC} Today (default)"
+        echo -e "  ${YELLOW}2)${NC} Yesterday"
+        echo -e "  ${YELLOW}3)${NC} Last 5 days"
+        echo -e "  ${YELLOW}4)${NC} Last 100 lines"
+        echo -e "  ${YELLOW}5)${NC} Follow live"
+        echo ""
+        
+        read -p "$(echo -e ${YELLOW}${BOLD}'Select option (1-5): '${NC})" time_choice
+        
+        # Default to today
+        [ -z "$time_choice" ] && time_choice="1"
+        
+        echo ""
+        echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        
+        case $time_choice in
+            1) # Today
+                echo -e "${BLUE}Showing logs from today:${NC}"
+                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
+                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                ;;
+            2) # Yesterday
+                echo -e "${BLUE}Showing logs from yesterday:${NC}"
+                docker logs --since "$(date -d yesterday '+%Y-%m-%d')T00:00:00" \
+                           --until "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
+                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                ;;
+            3) # Last 5 days
+                echo -e "${BLUE}Showing logs from last 5 days:${NC}"
+                docker logs --since "$(date -d '5 days ago' '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | \
+                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                ;;
+            4) # Last 100 lines
+                echo -e "${BLUE}Showing last 100 lines:${NC}"
+                docker logs --tail 100 "$container" 2>&1 | \
+                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                ;;
+            5) # Follow
+                echo -e "${BLUE}Following live logs (Ctrl+C to stop):${NC}"
+                docker logs -f --tail 50 "$container" 2>&1 | \
+                    sed -E "s/(error|ERROR|Error|fail|FAIL|Fail|failed|FAILED|Failed|fatal|FATAL|Fatal|panic|PANIC|Panic)/${RED}&${NC}/g" | \
+                    sed -E "s/(warning|WARNING|Warning|warn|WARN|Warn)/${YELLOW}&${NC}/g" | \
+                    sed -E "s/(info|INFO|Info)/${BLUE}&${NC}/g" | \
+                    sed -E "s/([4-5][0-9]{2})/${RED}&${NC}/g"
+                ;;
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                ;;
+        esac
+        
+        echo ""
+        echo -e "${DIM}════════════════════════════════════════════════════════════════════${NC}"
+    fi
+}
+
+# Show actions menu
+show_actions() {
+    echo ""
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}${BOLD}  AVAILABLE ACTIONS${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  ${YELLOW}U)${NC} Update specific project"
+    echo -e "  ${YELLOW}C)${NC} Clean Docker (safe)"
+    echo -e "  ${YELLOW}L)${NC} View container logs"
+    echo -e "  ${YELLOW}R)${NC} Refresh display"
+    echo -e "  ${YELLOW}Q)${NC} Quit"
+    echo ""
+    echo -e "${DIM}────────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+}
+
+# Main execution
+main() {
+    # Show main display first
+    main_display
+    
+    # Then show action menu
     while true; do
-        print_header
+        show_actions
+        read -p "$(echo -e ${YELLOW}${BOLD}'Select action: '${NC})" action
         
-        echo -e "${GREEN}${BOLD}Docker Compose Projects:${NC}"
-        echo -e "${YELLOW}  1)${NC} 📋 ${BOLD}List all Docker projects${NC}"
-        echo -e "${YELLOW}  2)${NC} 🔄 ${BOLD}Update specific project${NC}"
-        echo -e "${YELLOW}  3)${NC} ⚡ ${BOLD}Quick update (choose from list)${NC}"
-        echo -e "${YELLOW}  4)${NC} 🔁 ${BOLD}Update all projects${NC}"
-        echo -e "${YELLOW}  5)${NC} 🧹 ${BOLD}Clean Docker system${NC}"
-        echo -e "${YELLOW}  6)${NC} 📊 ${BOLD}Show Docker disk usage${NC}"
-        echo -e "${YELLOW}  7)${NC} 🔍 ${BOLD}View running containers${NC}"
-        echo -e "${YELLOW}  8)${NC} 📜 ${BOLD}View container logs${NC}"
-        echo -e "${YELLOW}  9)${NC} 🔐 ${BOLD}Backup & Restore${NC}"
-        echo -e "\n${RED}  0)${NC} ↩️  ${BOLD}Exit${NC}\n"
-        
-        read -p "$(echo -e ${BOLD}Select option: ${NC})" choice
-        
-        case $choice in
-            1) # List projects
-                print_header
-                print_section "DOCKER COMPOSE PROJECTS"
-                
-                echo -e "${CYAN}Searching for Docker Compose projects...${NC}\n"
-                find ~ -type f \( -name "docker-compose.yml" -o -name "compose.yml" \) 2>/dev/null | \
-                while read -r file; do
-                    dir=$(dirname "$file")
-                    container=$(grep -m1 "container_name:" "$file" 2>/dev/null | awk '{print $2}' | tr -d '"' || basename "$dir")
-                    echo -e "${BLUE}${BOLD}$container${NC} → ${DIM}$dir${NC}"
-                done
-                wait_for_enter
+        case ${action,,} in
+            u)
+                update_project
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
+                main_display
                 ;;
-                
-            2) # Update specific
-                dirs=($(find ~ -type f \( -name "docker-compose.yml" -o -name "compose.yml" \) 2>/dev/null | xargs -I {} dirname {} | sort -u))
-                if [ ${#dirs[@]} -eq 0 ]; then
-                    print_error "No Docker Compose projects found!"
-                    sleep 2
-                    continue
-                fi
-                
-                print_header
-                print_section "UPDATE SPECIFIC PROJECT"
-                
-                echo -e "${BOLD}Select project to update:${NC}\n"
-                for i in "${!dirs[@]}"; do
-                    dir="${dirs[$i]}"
-                    container=$(grep -m1 "container_name:" "$dir/docker-compose.yml" "$dir/compose.yml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || basename "$dir")
-                    printf "${YELLOW}%2d)${NC} ${BOLD}%-20s${NC} ${DIM}%s${NC}\n" "$((i+1))" "$container" "$dir"
-                done
-                
-                echo -e "\n${RED}  0)${NC} Cancel\n"
-                read -p "$(echo -e ${BOLD}Enter number: ${NC})" proj_num
-                
-                if [[ "$proj_num" =~ ^[0-9]+$ ]] && [ "$proj_num" -gt 0 ] && [ "$proj_num" -le "${#dirs[@]}" ]; then
-                    dir="${dirs[$((proj_num-1))]}"
-                    echo -e "\n${CYAN}${BOLD}Updating project in: $dir${NC}\n"
-                    cd "$dir"
-                    docker compose pull && docker compose down && docker compose up -d
-                    print_success "Update completed!"
-                    docker compose ps
-                fi
-                wait_for_enter
+            c)
+                clean_docker
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
+                main_display
                 ;;
-                
-            3) # Quick update
-                dirs=($(find ~ -type f \( -name "docker-compose.yml" -o -name "compose.yml" \) 2>/dev/null | xargs -I {} dirname {} | sort -u))
-                
-                print_header
-                echo -e "${CYAN}${BOLD}Quick Update - Select project:${NC}\n"
-                for i in "${!dirs[@]}"; do
-                    container=$(grep -m1 "container_name:" "${dirs[$i]}/docker-compose.yml" "${dirs[$i]}/compose.yml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || basename "${dirs[$i]}")
-                    printf "${YELLOW}%2d)${NC} ${BOLD}%s${NC}\n" "$((i+1))" "$container"
-                done
-                
-                read -p $'\n'"$(echo -e ${BOLD}Project number: ${NC})" num
-                if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt 0 ] && [ "$num" -le "${#dirs[@]}" ]; then
-                    cd "${dirs[$((num-1))]}" && docker compose pull && docker compose down && docker compose up -d
-                    print_success "Updated!"
-                fi
-                sleep 2
+            l)
+                view_logs
+                echo ""
+                read -p "$(echo -e ${DIM}'Press Enter to continue...'${NC})"
+                main_display
                 ;;
-                
-            4) # Update all
-                print_header
-                print_warning "This will update ALL Docker projects!"
-                read -p "$(echo -e ${BOLD}Continue? \(y/N\): ${NC})" -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    find ~ -type f \( -name "docker-compose.yml" -o -name "compose.yml" \) 2>/dev/null | xargs -I {} dirname {} | sort -u | \
-                    while read -r dir; do
-                        echo -e "\n${CYAN}${BOLD}Updating: $dir${NC}"
-                        cd "$dir" && docker compose pull && docker compose down && docker compose up -d
-                    done
-                    print_success "All projects updated!"
-                fi
-                wait_for_enter
+            r)
+                main_display
                 ;;
-                
-            5) # Clean Docker
-                print_header
-                print_section "DOCKER CLEANUP"
-                
-                docker system df
-                print_warning "Remove unused images, containers, and volumes?"
-                read -p "$(echo -e ${BOLD}Continue? \(y/N\): ${NC})" -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    docker system prune -a -f --volumes
-                    print_success "Cleanup completed!"
-                    docker system df
-                fi
-                wait_for_enter
+            q)
+                echo ""
+                echo -e "${GREEN}${BOLD}Goodbye! 🐳${NC}"
+                echo ""
+                exit 0
                 ;;
-                
-            6) # Disk usage
-                print_header
-                print_section "DOCKER DISK USAGE"
-                docker system df -v
-                wait_for_enter
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 1
                 ;;
-                
-            7) # Running containers
-                print_header
-                print_section "RUNNING CONTAINERS"
-                echo -e "${BOLD}"
-                docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"
-                echo -e "${NC}"
-                wait_for_enter
-                ;;
-                
-            8) # Container logs
-                print_header
-                print_section "CONTAINER LOGS"
-                
-                containers=($(docker ps --format "{{.Names}}"))
-                if [ ${#containers[@]} -eq 0 ]; then
-                    print_warning "No running containers"
-                    sleep 2
-                    continue
-                fi
-                
-                echo -e "${BOLD}Select container for logs:${NC}\n"
-                for i in "${!containers[@]}"; do
-                    printf "${YELLOW}%2d)${NC} ${BOLD}%s${NC}\n" "$((i+1))" "${containers[$i]}"
-                done
-                
-                echo -e "\n${RED}  0)${NC} Cancel\n"
-                read -p "$(echo -e ${BOLD}Container number: ${NC})" num
-                if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt 0 ] && [ "$num" -le "${#containers[@]}" ]; then
-                    echo -e "\n${CYAN}${BOLD}Logs for ${containers[$((num-1))]}:${NC}\n"
-                    docker logs --tail 50 -f "${containers[$((num-1))]}"
-                fi
-                ;;
-                
-            9) # Backup & Restore
-                backup_menu
-                ;;
-                
-            0) exit 0 ;;
-            *) print_error "Invalid option"; sleep 1 ;;
         esac
     done
 }
 
-# Start
-docker_menu
+# Check for help
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    echo "Docker Manager Script"
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help     Show this help message"
+    echo "  -w, --watch    Auto-refresh every 10 seconds"
+    echo ""
+    exit 0
+fi
+
+# Check for watch mode
+if [[ "$1" == "-w" ]] || [[ "$1" == "--watch" ]]; then
+    while true; do
+        main_display
+        echo ""
+        echo -e "${DIM}Auto-refresh in 10 seconds... Press Ctrl+C to stop${NC}"
+        sleep 10
+    done
+else
+    main
+fi
