@@ -356,7 +356,7 @@ main_display() {
     fi
 }
 
-# Function to update a project
+# IMPROVEMENT: A more robust, communicative, and safe update function
 update_project() {
     print_section "UPDATE DOCKER PROJECT"
 
@@ -378,19 +378,15 @@ update_project() {
     for i in "${!projects[@]}"; do
         project_dir="${projects[$i]}"
         project_name=$(basename "$project_dir")
-
         status_info=$(get_project_status "$project_dir")
         IFS='|' read -r total running <<< "$status_info"
 
         if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
-            status_color="${GREEN}"
-            status_text="[${running}/${total} running]"
+            status_color="${GREEN}"; status_text="[${running}/${total} running]"
         elif [ "$running" -eq 0 ]; then
-            status_color="${RED}"
-            status_text="[stopped]"
+            status_color="${RED}"; status_text="[stopped]"
         else
-            status_color="${YELLOW}"
-            status_text="[${running}/${total} running]"
+            status_color="${YELLOW}"; status_text="[${running}/${total} running]"
         fi
 
         printf "  ${YELLOW}%2d)${NC} %-25s ${status_color}%-20s${NC} ${DIM}%s${NC}\n" \
@@ -407,6 +403,25 @@ update_project() {
         project_dir="${projects[$((choice-1))]}"
         project_name=$(basename "$project_dir")
 
+        cd "$project_dir" || return
+
+        # --- IMPROVEMENT 1: PRE-FLIGHT CHECK ---
+        # Verify the docker-compose file is valid before doing anything else.
+        echo ""
+        echo -e "${DIM}Verifying compose file syntax...${NC}"
+        if ! docker compose config -q >/dev/null 2>&1; then
+            echo -e "${RED}${CROSS} Error: The docker-compose.yml file in '${project_name}' has a syntax error.${NC}"
+            echo -e "${RED}Please fix the file before attempting an update.${NC}"
+            return
+        fi
+        echo -e "${GREEN}${CHECK} Compose file is valid.${NC}"
+
+        # --- IMPROVEMENT 2: DATA SAFETY WARNING ---
+        echo ""
+        echo -e "${ORANGE}${WARNING} ${BOLD}Data Safety Notice${NC}"
+        echo -e "${DIM}  This script assumes your service data is stored in Docker Volumes.${NC}"
+        echo -e "${DIM}  The update process replaces containers but re-attaches existing volumes.${NC}"
+        echo -e "${DIM}  Ensure all stateful services (like databases) use volumes to prevent data loss.${NC}"
         echo ""
         read -p "$(echo -e ${YELLOW}${BOLD}"Are you sure you want to update '${project_name}'? (y/N): "${NC})" confirm
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -416,45 +431,77 @@ update_project() {
 
         echo ""
         echo -e "${CYAN}${BOLD}Updating project: ${project_name}${NC}"
-        echo -e "${DIM}Path: ${project_dir}${NC}"
-        echo ""
+        
+        # --- IMPROVEMENT 3: CAPTURE STATE BEFORE UPDATE ---
+        declare -A before_images
+        while IFS=' ' read -r service image; do
+            [ -n "$service" ] && before_images[$service]=$image
+        done < <(docker compose ps --services | xargs -n 1 docker compose ps -q | xargs -n 1 docker inspect --format '{{.Name}} {{.Image}}' | sed 's|/||' | sed 's/-[0-9]*$//')
 
-        cd "$project_dir" || return
-
-        echo -e "${BLUE}Current images:${NC}"
-        docker compose images
-        echo ""
 
         echo -e "${YELLOW}Pulling latest images...${NC}"
         if docker compose pull; then
             echo ""
-            echo -e "${YELLOW}Recreating containers with new images...${NC}"
+            echo -e "${YELLOW}Recreating containers (if needed)...${NC}"
+            
+            # Run the update
             if docker compose up -d --remove-orphans; then
                 echo ""
-                echo -e "${GREEN}${CHECK} Update completed successfully!${NC}"
-                echo ""
-                echo -e "${BLUE}Updated containers:${NC}"
-                docker compose ps
+                echo -e "${GREEN}${CHECK} Deployment completed successfully!${NC}"
+                
+                # --- IMPROVEMENT 4: COMPARE STATE AND SHOW DIFF ---
+                declare -A after_images
+                while IFS=' ' read -r service image; do
+                    [ -n "$service" ] && after_images[$service]=$image
+                done < <(docker compose ps --services | xargs -n 1 docker compose ps -q | xargs -n 1 docker inspect --format '{{.Name}} {{.Image}}' | sed 's|/||' | sed 's/-[0-9]*$//')
 
+
+                echo ""
+                echo -e "${WHITE}${BOLD}Update Summary:${NC}"
+                updated_count=0
+                for service in "${!after_images[@]}"; do
+                    before_sha=${before_images[$service]}
+                    after_sha=${after_images[$service]}
+
+                    if [ "$before_sha" != "$after_sha" ]; then
+                        printf "  ${GREEN}${BULLET} %-25s updated from %s to %s${NC}\n" "$service" "${before_sha:7:19}" "${after_sha:7:19}"
+                        ((updated_count++))
+                    fi
+                done
+
+                if [ $updated_count -eq 0 ]; then
+                    echo -e "${DIM}  No services were updated. All images are current.${NC}"
+                fi
+
+                # Offer to prune dangling images post-update
                 dangling_images=$(docker images -f "dangling=true" -q | wc -l)
                 if [ "$dangling_images" -gt 0 ]; then
                     echo ""
-                    read -p "$(echo -e ${YELLOW}${BOLD}"Prune old images to save space? (y/N): "${NC})" prune_choice
+                    read -p "$(echo -e ${YELLOW}${BOLD}"Prune ${dangling_images} old image layers to save space? (y/N): "${NC})" prune_choice
                     if [[ "$prune_choice" =~ ^[Yy]$ ]]; then
                         docker image prune -f
                         echo -e "${GREEN}Old images pruned.${NC}"
                     fi
                 fi
             else
-                echo -e "${RED}${CROSS} Failed to recreate containers${NC}"
+                # --- IMPROVEMENT 5: INTELLIGENT FAILURE GUIDANCE ---
+                echo ""
+                echo -e "${RED}${CROSS} FAILED TO RECREATE CONTAINERS!${NC}"
+                echo -e "${YELLOW}The project may be in a non-running state.${NC}"
+                echo -e "To diagnose, check the logs of the failed container(s)."
+                # Find containers that are stopped/exited and suggest logging them
+                while read -r container_id; do
+                    container_name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's|/||')
+                    echo -e "${CYAN}  Try running: ${WHITE}docker logs ${container_name}${NC}"
+                done < <(docker compose ps -q --status exited --status created)
             fi
         else
-            echo -e "${RED}${CROSS} Failed to pull images${NC}"
+            echo -e "${RED}${CROSS} Failed to pull new images. Aborting update.${NC}"
         fi
     fi
 }
 
-# FIX: Re-engineered the clean function for accuracy and better feedback
+# Function to clean Docker
 clean_docker() {
     print_section "CLEAN DOCKER SYSTEM"
 
@@ -474,18 +521,15 @@ clean_docker() {
 
     read -p "$(echo -e ${YELLOW}${BOLD}'Proceed with standard cleanup? (y/N): '${NC})" confirm_prune
 
-    local reclaimed_space="Total reclaimed space: 0B" # Default value
+    local reclaimed_space="Total reclaimed space: 0B"
 
     if [[ "$confirm_prune" =~ ^[Yy]$ ]]; then
         echo -e "${YELLOW}Running standard cleanup...${NC}"
-        # FIX: Capture the output of the prune command
         local prune_output
         prune_output=$(docker system prune -f)
         
-        # FIX: Display the actual output for user feedback
         echo -e "${DIM}${prune_output}${NC}"
 
-        # FIX: Extract the actual reclaimed space from the command's output
         reclaimed_space=$(echo "$prune_output" | tail -n 1)
         echo -e "${GREEN}${CHECK} Standard cleanup complete.${NC}"
     else
@@ -518,7 +562,6 @@ clean_docker() {
     docker system df
     echo ""
 
-    # FIX: Display the accurate reclaimed space summary
     echo -e "${GREEN}${CHECK} Cleanup finished! ${BOLD}${reclaimed_space}${NC}"
 }
 
