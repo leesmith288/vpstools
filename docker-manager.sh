@@ -1,6 +1,6 @@
 #!/bin/bash
-# Docker Manager Script - Beautiful & Accessible Version
-# Optimized for readability and visual clarity
+# Docker Manager Script - Safe & User-Friendly Version
+# Fixed log viewing and improved safety checks
 
 # Check if Docker is installed and running
 if ! command -v docker &> /dev/null; then
@@ -26,7 +26,7 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-# Symbols - Larger and clearer
+# Symbols
 CHECK="✓"
 CROSS="✗"
 WARNING="⚠"
@@ -76,6 +76,13 @@ get_project_status() {
     echo "$total|$running"
 }
 
+# Press Enter to continue helper
+press_enter() {
+    echo ""
+    echo ""
+    read -p "$(echo -e "    ${DIM}Press Enter to continue...${NC}")"
+}
+
 # Beautiful dashboard with better spacing
 show_dashboard() {
     clear
@@ -91,7 +98,7 @@ show_dashboard() {
     echo ""
     echo ""
     
-    # Quick stats with larger font effect
+    # Quick stats
     local total=$(wc -l < "$CACHE_FILE")
     local running=$(grep -c "|running$" "$CACHE_FILE")
     local stopped=$((total - running))
@@ -214,7 +221,7 @@ show_dashboard() {
     echo ""
 }
 
-# Container actions menu - redesigned
+# Container actions menu
 show_container_actions() {
     local container=$1
     
@@ -229,6 +236,13 @@ show_container_actions() {
         echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         echo ""
+        
+        # Check if container still exists
+        if ! docker inspect "$container" &>/dev/null; then
+            echo -e "    ${RED}${CROSS} Container no longer exists${NC}"
+            press_enter
+            return
+        fi
         
         # Get container state
         local state=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
@@ -276,13 +290,19 @@ show_container_actions() {
                 if [ "$state" = "running" ]; then
                     echo ""
                     echo -e "    ${YELLOW}Restarting container...${NC}"
-                    docker restart "$container" >/dev/null 2>&1
-                    echo -e "    ${GREEN}${BOLD}${CHECK}  Container restarted successfully${NC}"
+                    if docker restart "$container" &>/dev/null; then
+                        echo -e "    ${GREEN}${BOLD}${CHECK}  Container restarted successfully${NC}"
+                    else
+                        echo -e "    ${RED}${BOLD}${CROSS}  Failed to restart container${NC}"
+                    fi
                 else
                     echo ""
                     echo -e "    ${YELLOW}Starting container...${NC}"
-                    docker start "$container" >/dev/null 2>&1
-                    echo -e "    ${GREEN}${BOLD}${CHECK}  Container started successfully${NC}"
+                    if docker start "$container" &>/dev/null; then
+                        echo -e "    ${GREEN}${BOLD}${CHECK}  Container started successfully${NC}"
+                    else
+                        echo -e "    ${RED}${BOLD}${CROSS}  Failed to start container${NC}"
+                    fi
                 fi
                 sleep 2
                 refresh_cache
@@ -291,8 +311,11 @@ show_container_actions() {
                 if [ "$state" = "running" ]; then
                     echo ""
                     echo -e "    ${YELLOW}Stopping container...${NC}"
-                    docker stop "$container" >/dev/null 2>&1
-                    echo -e "    ${GREEN}${BOLD}${CHECK}  Container stopped successfully${NC}"
+                    if docker stop "$container" &>/dev/null; then
+                        echo -e "    ${GREEN}${BOLD}${CHECK}  Container stopped successfully${NC}"
+                    else
+                        echo -e "    ${RED}${BOLD}${CROSS}  Failed to stop container${NC}"
+                    fi
                     sleep 2
                     refresh_cache
                 fi
@@ -302,23 +325,32 @@ show_container_actions() {
                 echo ""
                 read -p "$(echo -e "    ${RED}${BOLD}Remove '$container'? This cannot be undone. (y/N): ${NC}")" confirm
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                    [ "$state" = "running" ] && docker stop "$container" >/dev/null 2>&1
-                    docker rm "$container" >/dev/null 2>&1
-                    echo ""
-                    echo -e "    ${GREEN}${BOLD}${CHECK}  Container removed${NC}"
-                    sleep 2
-                    refresh_cache
-                    return
+                    [ "$state" = "running" ] && docker stop "$container" &>/dev/null
+                    if docker rm "$container" &>/dev/null; then
+                        echo ""
+                        echo -e "    ${GREEN}${BOLD}${CHECK}  Container removed${NC}"
+                        sleep 2
+                        refresh_cache
+                        return
+                    else
+                        echo ""
+                        echo -e "    ${RED}${BOLD}${CROSS}  Failed to remove container${NC}"
+                        sleep 2
+                    fi
                 fi
                 ;;
             0)
                 return
                 ;;
+            *)
+                echo -e "    ${RED}Invalid option${NC}"
+                sleep 1
+                ;;
         esac
     done
 }
 
-# Project actions menu - redesigned
+# Project actions menu
 show_project_actions() {
     local project=$1
     local project_path=$2
@@ -330,7 +362,7 @@ show_project_actions() {
     
     if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
         echo -e "    ${RED}${CROSS} Project directory not found${NC}"
-        sleep 2
+        press_enter
         return
     fi
     
@@ -406,7 +438,7 @@ show_project_actions() {
                     docker compose up -d --remove-orphans
                     echo ""
                     echo -e "    ${GREEN}${BOLD}${CHECK}  Project updated successfully${NC}"
-                    sleep 3
+                    press_enter
                     refresh_cache
                 fi
                 ;;
@@ -416,7 +448,7 @@ show_project_actions() {
                 docker compose up -d
                 echo ""
                 echo -e "    ${GREEN}${BOLD}${CHECK}  Project started${NC}"
-                sleep 2
+                press_enter
                 refresh_cache
                 ;;
             4)
@@ -429,7 +461,7 @@ show_project_actions() {
                     docker compose down
                     echo ""
                     echo -e "    ${GREEN}${BOLD}${CHECK}  Project stopped${NC}"
-                    sleep 2
+                    press_enter
                     refresh_cache
                 fi
                 ;;
@@ -439,7 +471,7 @@ show_project_actions() {
                 docker compose restart
                 echo ""
                 echo -e "    ${GREEN}${BOLD}${CHECK}  Project restarted${NC}"
-                sleep 2
+                press_enter
                 refresh_cache
                 ;;
             6)
@@ -449,16 +481,20 @@ show_project_actions() {
                 echo ""
                 echo -e "    ${GREEN}${BOLD}${CHECK}  Images pulled${NC}"
                 echo -e "    ${DIM}Run 'docker compose up -d' to apply changes${NC}"
-                sleep 3
+                press_enter
                 ;;
             0)
                 return
+                ;;
+            *)
+                echo -e "    ${RED}Invalid option${NC}"
+                sleep 1
                 ;;
         esac
     done
 }
 
-# View container logs
+# FIXED: View container logs - NO MORE LESS TRAP!
 view_container_logs() {
     local container=$1
     
@@ -493,39 +529,57 @@ view_container_logs() {
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from last hour (Ctrl+C to stop):${NC}"
                 echo ""
-                docker logs --since 1h "$container" 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker logs --since 1h "$container" 2>&1 | colorize_logs
+                press_enter
                 ;;
             2)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today (Ctrl+C to stop):${NC}"
                 echo ""
-                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs
+                press_enter
                 ;;
             3)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
                 echo ""
-                docker logs --tail 100 "$container" 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker logs --tail 100 "$container" 2>&1 | colorize_logs
+                press_enter
                 ;;
             4)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
                 echo ""
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
                 docker logs -f --tail 50 "$container" 2>&1 | colorize_logs
+                echo ""
+                echo -e "    ${YELLOW}Log stream stopped${NC}"
+                press_enter
                 ;;
             0)
                 return
+                ;;
+            *)
+                echo -e "    ${RED}Invalid option${NC}"
+                sleep 1
                 ;;
         esac
     done
 }
 
-# View project logs
+# FIXED: View project logs - NO MORE LESS TRAP!
 view_project_logs() {
     local project_path=$1
     
@@ -562,33 +616,51 @@ view_project_logs() {
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from last hour (Ctrl+C to stop):${NC}"
                 echo ""
-                docker compose logs --since 1h 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker compose logs --since 1h 2>&1 | colorize_logs
+                press_enter
                 ;;
             2)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today (Ctrl+C to stop):${NC}"
                 echo ""
-                docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs
+                press_enter
                 ;;
             3)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
                 echo ""
-                docker compose logs --tail 100 2>&1 | colorize_logs | less -R +G
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker compose logs --tail 100 2>&1 | colorize_logs
+                press_enter
                 ;;
             4)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
                 echo ""
+                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
                 docker compose logs -f --tail 50 2>&1 | colorize_logs
+                echo ""
+                echo -e "    ${YELLOW}Log stream stopped${NC}"
+                press_enter
                 ;;
             0)
                 return
+                ;;
+            *)
+                echo -e "    ${RED}Invalid option${NC}"
+                sleep 1
                 ;;
         esac
     done
@@ -661,9 +733,7 @@ clean_docker() {
         docker system df | sed 's/^/    /'
     fi
     
-    echo ""
-    echo ""
-    read -p "$(echo -e "    ${DIM}Press Enter to continue...${NC}")"
+    press_enter
     refresh_cache
 }
 
@@ -702,6 +772,8 @@ main() {
                     fi
                     refresh_cache
                 fi
+                ;;
+            *)
                 ;;
         esac
     done
