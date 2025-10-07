@@ -52,9 +52,9 @@ refresh_cache() {
     }' | sort > "$CACHE_FILE"
 }
 
-# Find compose projects - IMPROVED VERSION
+# Find compose projects
 find_compose_projects() {
-    # First, try to find all compose files
+    # First, try to find all compose files in home
     local compose_dirs=$(find "$HOME" -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name "compose.yml" -o -name "compose.yaml" \) 2>/dev/null | \
     while read -r file; do
         dirname "$file"
@@ -73,36 +73,72 @@ find_compose_projects() {
     echo "$compose_dirs" | sort -u
 }
 
-# IMPROVED: Find project path by name with fuzzy matching
+# FIXED: Much better fuzzy matching for project paths
 find_project_path() {
     local project_name=$1
     local found_path=""
+    local all_paths=$(find_compose_projects)
+    
+    # Debug output
+    echo -e "    ${DIM}Looking for project: $project_name${NC}" >&2
     
     # Try exact match first
-    found_path=$(find_compose_projects | grep -m1 "/${project_name}$")
-    
-    # If not found, try case-insensitive match
-    if [ -z "$found_path" ]; then
-        found_path=$(find_compose_projects | grep -i -m1 "/${project_name}$")
+    found_path=$(echo "$all_paths" | grep -m1 "/${project_name}$")
+    if [ -n "$found_path" ]; then
+        echo "$found_path"
+        return
     fi
     
-    # If still not found, try partial match
-    if [ -z "$found_path" ]; then
-        found_path=$(find_compose_projects | grep -i -m1 "${project_name}")
+    # Try case-insensitive exact match
+    found_path=$(echo "$all_paths" | grep -i -m1 "/${project_name}$")
+    if [ -n "$found_path" ]; then
+        echo "$found_path"
+        return
     fi
     
-    # If still not found, try to match with hyphens/underscores variations
-    if [ -z "$found_path" ]; then
-        local alt_name=$(echo "$project_name" | tr '_' '-')
-        found_path=$(find_compose_projects | grep -i -m1 "${alt_name}")
+    # IMPORTANT FIX: Handle common abbreviations and variations
+    # Convert "database" to "db" and vice versa
+    local variations=()
+    variations+=("$project_name")
+    variations+=("$(echo "$project_name" | sed 's/database/db/g')")
+    variations+=("$(echo "$project_name" | sed 's/db/database/g')")
+    variations+=("$(echo "$project_name" | tr '_' '-')")
+    variations+=("$(echo "$project_name" | tr '-' '_')")
+    variations+=("$(echo "$project_name" | sed 's/-database$/-db/g')")
+    variations+=("$(echo "$project_name" | sed 's/_database$/_db/g')")
+    variations+=("$(echo "$project_name" | sed 's/-db$/-database/g')")
+    variations+=("$(echo "$project_name" | sed 's/_db$/_database/g')")
+    
+    # Try each variation
+    for variant in "${variations[@]}"; do
+        # Try exact match with variant
+        found_path=$(echo "$all_paths" | grep -i -m1 "/${variant}$")
+        if [ -n "$found_path" ]; then
+            echo "$found_path"
+            return
+        fi
+        
+        # Try partial match with variant (beginning of path component)
+        found_path=$(echo "$all_paths" | grep -i -m1 "/${variant}")
+        if [ -n "$found_path" ]; then
+            echo "$found_path"
+            return
+        fi
+    done
+    
+    # Last resort: try to match any part of the project name
+    # Split by common separators and try to match the main part
+    local main_part=$(echo "$project_name" | sed -E 's/[-_](db|database|api|app|service|server|client)$//i')
+    if [ -n "$main_part" ] && [ "$main_part" != "$project_name" ]; then
+        found_path=$(echo "$all_paths" | grep -i -m1 "/${main_part}")
+        if [ -n "$found_path" ]; then
+            echo "$found_path"
+            return
+        fi
     fi
     
-    if [ -z "$found_path" ]; then
-        local alt_name=$(echo "$project_name" | tr '-' '_')
-        found_path=$(find_compose_projects | grep -i -m1 "${alt_name}")
-    fi
-    
-    echo "$found_path"
+    # If still not found, return empty
+    echo ""
 }
 
 # Get project status
@@ -159,18 +195,36 @@ show_dashboard() {
     echo ""
     echo ""
     
-    # Get unique projects
+    # Get unique projects and build path mappings
     declare -A projects
     declare -A project_paths
     
-    # IMPROVED: Build a better mapping of project names to paths
+    # Build comprehensive project-to-path mapping
     while IFS= read -r path; do
         if [ -n "$path" ] && [ -d "$path" ]; then
             local dir_name=$(basename "$path")
-            # Store all possible paths for each basename
-            if [ -z "${project_paths[$dir_name]}" ]; then
-                project_paths["$dir_name"]="$path"
-            fi
+            project_paths["$dir_name"]="$path"
+            
+            # IMPORTANT: Also map common variations
+            # Handle lobe-chat-db -> lobe-chat-database mapping
+            case "$dir_name" in
+                *-db)
+                    local alt_name="${dir_name%-db}-database"
+                    project_paths["$alt_name"]="$path"
+                    ;;
+                *_db)
+                    local alt_name="${dir_name%_db}_database"
+                    project_paths["$alt_name"]="$path"
+                    ;;
+                *-database)
+                    local alt_name="${dir_name%-database}-db"
+                    project_paths["$alt_name"]="$path"
+                    ;;
+                *_database)
+                    local alt_name="${dir_name%_database}_db"
+                    project_paths["$alt_name"]="$path"
+                    ;;
+            esac
         fi
     done < <(find_compose_projects)
     
@@ -216,10 +270,10 @@ show_dashboard() {
                 "$index" "$indicator" "$project" "$status_text"
             echo ""
             
-            # IMPROVED: Store project with better path resolution
+            # Try to find the path using our mapping first, then fuzzy search
             local proj_path="${project_paths[$project]}"
-            if [ -z "$proj_path" ]; then
-                proj_path=$(find_project_path "$project")
+            if [ -z "$proj_path" ] || [ ! -d "$proj_path" ]; then
+                proj_path=$(find_project_path "$project" 2>/dev/null)
             fi
             MENU_MAP[$index]="PROJECT|$project|$proj_path"
             ((index++))
@@ -404,26 +458,24 @@ show_container_actions() {
     done
 }
 
-# Project actions menu - IMPROVED
+# Project actions menu - FIXED
 show_project_actions() {
     local project=$1
     local project_path=$2
     
-    # IMPROVED: Better path finding logic
+    # Better path finding with cleaner output
     if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
-        echo ""
-        echo -e "    ${YELLOW}Searching for project directory...${NC}"
-        project_path=$(find_project_path "$project")
+        project_path=$(find_project_path "$project" 2>/dev/null)
         
         if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
+            echo ""
             echo -e "    ${RED}${CROSS} Project directory not found for: ${project}${NC}"
             echo ""
-            echo -e "    ${DIM}Trying to locate compose files...${NC}"
+            echo -e "    ${DIM}Available compose directories:${NC}"
             
-            # List all found compose directories for debugging
+            # List all found compose directories
             local all_dirs=$(find_compose_projects)
             if [ -n "$all_dirs" ]; then
-                echo -e "    ${DIM}Found compose directories:${NC}"
                 echo "$all_dirs" | while read -r dir; do
                     echo -e "        ${DIM}- $dir${NC}"
                 done
