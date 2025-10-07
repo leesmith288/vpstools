@@ -1,6 +1,6 @@
 #!/bin/bash
 # Docker Manager Script - Beautiful & Safe Version
-# Two-level cleanup system: Basic (safe) and Deep (thorough)
+# Streamlined with single deep cleanup and immediate log viewing
 
 # Check if Docker is installed and running
 if ! command -v docker &> /dev/null; then
@@ -265,7 +265,7 @@ show_dashboard() {
     echo -e "${CYAN}${BOLD}    ACTIONS${NC}"
     echo ""
     echo ""
-    echo -e "        ${YELLOW}${BOLD}[G]${NC}  ${WHITE}Global Actions${NC}  ${DIM}(cleanup, prune)${NC}"
+    echo -e "        ${YELLOW}${BOLD}[C]${NC}  ${WHITE}Clean System${NC}  ${DIM}(remove unused resources)${NC}"
     echo ""
     echo -e "        ${YELLOW}${BOLD}[R]${NC}  ${WHITE}Refresh${NC}"
     echo ""
@@ -316,7 +316,7 @@ show_container_actions() {
         echo ""
         echo ""
         
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}docker logs${NC}               ${DIM}View container logs${NC}"
+        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}View logs${NC}                 ${DIM}View container logs${NC}"
         echo ""
         
         if [ "$state" = "running" ]; then
@@ -486,7 +486,7 @@ show_project_actions() {
         echo ""
         echo ""
         
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}docker compose logs${NC}                  ${DIM}View logs${NC}"
+        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}View logs${NC}                           ${DIM}View project logs${NC}"
         echo ""
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}docker compose pull + up -d${NC}         ${GREEN}${DIM}Update & recreate${NC}"
         echo ""
@@ -578,7 +578,7 @@ show_project_actions() {
     done
 }
 
-# View container logs
+# IMPROVED: View container logs - Shows last hour immediately
 view_container_logs() {
     local container=$1
     
@@ -590,49 +590,35 @@ view_container_logs() {
         echo ""
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
+        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
+        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         
-        echo -e "${WHITE}${BOLD}    SELECT TIME RANGE${NC}"
+        # Show last hour logs immediately
+        docker logs --since 1h "$container" 2>&1 | colorize_logs
+        
         echo ""
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
+        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
         echo ""
         
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Today${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[3]${NC}  ${WHITE}Last 100 lines${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[4]${NC}  ${WHITE}Follow live${NC}  ${DIM}(Ctrl+C to stop)${NC}"
-        echo ""
-        echo ""
-        echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back${NC}"
-        echo ""
-        echo ""
-        
-        read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
+        read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
         
         case $choice in
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour (Ctrl+C to stop):${NC}"
-                echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
-                echo ""
-                docker logs --since 1h "$container" 2>&1 | colorize_logs
-                press_enter
-                ;;
-            2)
-                clear
-                echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today (Ctrl+C to stop):${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
                 docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs
                 press_enter
                 ;;
-            3)
+            2)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
@@ -642,7 +628,7 @@ view_container_logs() {
                 docker logs --tail 100 "$container" 2>&1 | colorize_logs
                 press_enter
                 ;;
-            4)
+            3)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
@@ -654,7 +640,7 @@ view_container_logs() {
                 echo -e "    ${YELLOW}Log stream stopped${NC}"
                 press_enter
                 ;;
-            0)
+            0|"")
                 return
                 ;;
             *)
@@ -663,7 +649,7 @@ view_container_logs() {
     done
 }
 
-# View project logs
+# IMPROVED: View project logs - Shows last hour immediately
 view_project_logs() {
     local project_path=$1
     cd "$project_path" || return
@@ -676,49 +662,35 @@ view_project_logs() {
         echo ""
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
+        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
+        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         
-        echo -e "${WHITE}${BOLD}    SELECT TIME RANGE${NC}"
+        # Show last hour logs immediately
+        docker compose logs --since 1h 2>&1 | colorize_logs
+        
         echo ""
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
+        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
         echo ""
         
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Today${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[3]${NC}  ${WHITE}Last 100 lines${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[4]${NC}  ${WHITE}Follow live${NC}  ${DIM}(Ctrl+C to stop)${NC}"
-        echo ""
-        echo ""
-        echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back${NC}"
-        echo ""
-        echo ""
-        
-        read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
+        read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
         
         case $choice in
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour (Ctrl+C to stop):${NC}"
-                echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
-                echo ""
-                docker compose logs --since 1h 2>&1 | colorize_logs
-                press_enter
-                ;;
-            2)
-                clear
-                echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today (Ctrl+C to stop):${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
                 docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs
                 press_enter
                 ;;
-            3)
+            2)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
@@ -728,7 +700,7 @@ view_project_logs() {
                 docker compose logs --tail 100 2>&1 | colorize_logs
                 press_enter
                 ;;
-            4)
+            3)
                 clear
                 echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
@@ -740,7 +712,7 @@ view_project_logs() {
                 echo -e "    ${YELLOW}Log stream stopped${NC}"
                 press_enter
                 ;;
-            0)
+            0|"")
                 return
                 ;;
             *)
@@ -757,129 +729,25 @@ colorize_logs() {
     sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
 }
 
-# IMPROVED: Two-level cleanup system
+# IMPROVED: Single deep cleanup with one confirmation
 clean_docker() {
-    while true; do
-        clear
-        echo ""
-        echo ""
-        echo -e "${CYAN}${BOLD}    ╔════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ║    CLEAN DOCKER SYSTEM${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "${WHITE}${BOLD}    CURRENT DISK USAGE${NC}"
-        echo ""
-        docker system df | sed 's/^/    /'
-        echo ""
-        echo ""
-        
-        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "${WHITE}${BOLD}    SELECT CLEANUP LEVEL${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Basic Cleanup${NC}"
-        echo ""
-        echo -e "            ${DIM}Removes: stopped containers, unused networks, dangling images${NC}"
-        echo -e "            ${GREEN}Safe - Running containers protected${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${ORANGE}Deep Cleanup${NC}"
-        echo ""
-        echo -e "            ${DIM}Removes: ALL unused images (old versions, unused pulls)${NC}"
-        echo -e "            ${ORANGE}Reclaims ALL reclaimable space shown above${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back to main menu${NC}"
-        echo ""
-        echo ""
-        
-        read -p "$(echo -e "    ${YELLOW}${BOLD}Select cleanup level: ${NC}")" cleanup_choice
-        
-        case $cleanup_choice in
-            1)
-                basic_cleanup
-                ;;
-            2)
-                deep_cleanup
-                ;;
-            0)
-                return
-                ;;
-            *)
-                ;;
-        esac
-    done
-}
-
-# Level 1: Basic cleanup (safe)
-basic_cleanup() {
     clear
     echo ""
     echo ""
-    echo -e "${CYAN}${BOLD}    BASIC CLEANUP${NC}"
-    echo ""
-    echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
-    echo ""
-    echo ""
-    
-    echo -e "${YELLOW}${BOLD}    This will remove:${NC}"
-    echo ""
-    echo -e "        ${DOT}  All stopped containers"
-    echo -e "        ${DOT}  All unused networks"
-    echo -e "        ${DOT}  All dangling images ${DIM}(untagged <none>)${NC}"
-    echo -e "        ${DOT}  All dangling build cache"
-    echo ""
-    echo ""
-    echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers and their images are protected${NC}"
+    echo -e "${CYAN}${BOLD}    ╔════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
+    echo -e "${CYAN}${BOLD}    ║                    CLEAN DOCKER SYSTEM                            ║${NC}"
+    echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
+    echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo ""
     
-    read -p "$(echo -e "    ${YELLOW}${BOLD}Proceed? (y/N): ${NC}")" confirm
+    echo -e "${WHITE}${BOLD}    CURRENT DISK USAGE${NC}"
+    echo ""
+    docker system df | sed 's/^/    /'
+    echo ""
+    echo ""
     
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        echo ""
-        echo -e "    ${YELLOW}Running basic cleanup...${NC}"
-        echo ""
-        docker system prune -f 2>&1 | sed 's/^/    /'
-        echo ""
-        echo -e "    ${GREEN}${BOLD}${CHECK}  Basic cleanup complete${NC}"
-        echo ""
-        echo ""
-        
-        echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
-        echo ""
-        docker system df | sed 's/^/    /'
-        echo ""
-        echo ""
-        
-        # Check if there's still reclaimable space
-        local reclaimable=$(docker system df | grep -E 'Images.*\(' | grep -oP '\d+\.\d+GB|\d+GB|\d+MB' | head -1)
-        if [ -n "$reclaimable" ]; then
-            echo -e "    ${ORANGE}${WARNING}  ${reclaimable} still reclaimable${NC}"
-            echo -e "    ${DIM}Run 'Deep Cleanup' to remove unused images${NC}"
-        fi
-        
-        press_enter
-    fi
-}
-
-# Level 2: Deep cleanup (removes all unused images)
-deep_cleanup() {
-    clear
-    echo ""
-    echo ""
-    echo -e "${ORANGE}${BOLD}    DEEP CLEANUP${NC}"
-    echo ""
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
@@ -890,47 +758,54 @@ deep_cleanup() {
     echo -e "        ${DOT}  All unused networks"
     echo -e "        ${DOT}  ${ORANGE}${BOLD}ALL unused images${NC} ${DIM}(not used by any container)${NC}"
     echo -e "        ${DOT}  All build cache"
+    echo -e "        ${DOT}  All unused volumes ${DIM}(if confirmed)${NC}"
     echo ""
     echo ""
-    echo -e "    ${ORANGE}${WARNING}  This removes:${NC}"
+    echo -e "    ${ORANGE}${WARNING}  This includes:${NC}"
     echo -e "        ${DIM}- Old image versions after updates${NC}"
     echo -e "        ${DIM}- Images from deleted projects${NC}"
     echo -e "        ${DIM}- Images pulled but never used${NC}"
     echo ""
-    echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers are protected${NC}"
+    echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers and their resources are protected${NC}"
     echo ""
     echo ""
     
-    read -p "$(echo -e "    ${ORANGE}${BOLD}Proceed with deep cleanup? (y/N): ${NC}")" confirm
+    read -p "$(echo -e "    ${ORANGE}${BOLD}Proceed with cleanup? (y/N): ${NC}")" confirm
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         echo ""
-        echo -e "    ${YELLOW}Running deep cleanup...${NC}"
+        echo -e "    ${YELLOW}Step 1/3: Running system prune...${NC}"
         echo ""
         docker system prune -a -f 2>&1 | sed 's/^/    /'
+        
         echo ""
-        echo -e "    ${GREEN}${BOLD}${CHECK}  Deep cleanup complete${NC}"
+        echo -e "    ${YELLOW}Step 2/3: Checking for unused volumes...${NC}"
+        echo ""
+        
+        # Check and remove unused volumes without asking again
+        local unused_volumes=$(docker volume ls -qf dangling=true 2>/dev/null | wc -l)
+        if [ "$unused_volumes" -gt 0 ]; then
+            echo -e "    ${YELLOW}Found ${unused_volumes} unused volumes. Removing...${NC}"
+            docker volume prune -f 2>&1 | sed 's/^/    /'
+        else
+            echo -e "    ${GREEN}No unused volumes found${NC}"
+        fi
+        
+        echo ""
+        echo -e "    ${YELLOW}Step 3/3: Final cleanup...${NC}"
+        echo ""
+        
+        # Clean up builder cache
+        docker builder prune -af 2>/dev/null | sed 's/^/    /'
+        
+        echo ""
+        echo -e "    ${GREEN}${BOLD}${CHECK}  Cleanup complete!${NC}"
         echo ""
         echo ""
         
         echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
         echo ""
         docker system df | sed 's/^/    /'
-        echo ""
-        echo ""
-        
-        # Check for unused volumes
-        local unused_volumes=$(docker volume ls -qf dangling=true 2>/dev/null | wc -l)
-        if [ "$unused_volumes" -gt 0 ]; then
-            echo -e "    ${ORANGE}${WARNING}  Found ${unused_volumes} unused volumes${NC}"
-            echo ""
-            read -p "$(echo -e "    ${RED}${BOLD}Remove unused volumes? (y/N): ${NC}")" vol_confirm
-            if [[ "$vol_confirm" =~ ^[Yy]$ ]]; then
-                docker volume prune -f 2>&1 | sed 's/^/    /'
-                echo ""
-                echo -e "    ${GREEN}${BOLD}${CHECK}  Unused volumes removed${NC}"
-            fi
-        fi
         
         press_enter
         refresh_cache
@@ -958,7 +833,7 @@ main() {
             r)
                 refresh_cache
                 ;;
-            g)
+            c)
                 clean_docker
                 ;;
             [0-9]*)
