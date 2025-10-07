@@ -52,12 +52,57 @@ refresh_cache() {
     }' | sort > "$CACHE_FILE"
 }
 
-# Find compose projects
+# Find compose projects - IMPROVED VERSION
 find_compose_projects() {
-    find "$HOME" -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name "compose.yml" -o -name "compose.yaml" \) 2>/dev/null | \
+    # First, try to find all compose files
+    local compose_dirs=$(find "$HOME" -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name "compose.yml" -o -name "compose.yaml" \) 2>/dev/null | \
     while read -r file; do
         dirname "$file"
-    done | sort -u
+    done | sort -u)
+    
+    # Also check common Docker locations
+    for dir in /opt /srv /var/lib; do
+        if [ -d "$dir" ]; then
+            find "$dir" -maxdepth 3 -type f \( -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name "compose.yml" -o -name "compose.yaml" \) 2>/dev/null | \
+            while read -r file; do
+                dirname "$file"
+            done
+        fi
+    done 2>/dev/null
+    
+    echo "$compose_dirs" | sort -u
+}
+
+# IMPROVED: Find project path by name with fuzzy matching
+find_project_path() {
+    local project_name=$1
+    local found_path=""
+    
+    # Try exact match first
+    found_path=$(find_compose_projects | grep -m1 "/${project_name}$")
+    
+    # If not found, try case-insensitive match
+    if [ -z "$found_path" ]; then
+        found_path=$(find_compose_projects | grep -i -m1 "/${project_name}$")
+    fi
+    
+    # If still not found, try partial match
+    if [ -z "$found_path" ]; then
+        found_path=$(find_compose_projects | grep -i -m1 "${project_name}")
+    fi
+    
+    # If still not found, try to match with hyphens/underscores variations
+    if [ -z "$found_path" ]; then
+        local alt_name=$(echo "$project_name" | tr '_' '-')
+        found_path=$(find_compose_projects | grep -i -m1 "${alt_name}")
+    fi
+    
+    if [ -z "$found_path" ]; then
+        local alt_name=$(echo "$project_name" | tr '-' '_')
+        found_path=$(find_compose_projects | grep -i -m1 "${alt_name}")
+    fi
+    
+    echo "$found_path"
 }
 
 # Get project status
@@ -118,10 +163,15 @@ show_dashboard() {
     declare -A projects
     declare -A project_paths
     
-    # Find compose project directories
+    # IMPROVED: Build a better mapping of project names to paths
     while IFS= read -r path; do
-        local proj_name=$(basename "$path")
-        project_paths["$proj_name"]="$path"
+        if [ -n "$path" ] && [ -d "$path" ]; then
+            local dir_name=$(basename "$path")
+            # Store all possible paths for each basename
+            if [ -z "${project_paths[$dir_name]}" ]; then
+                project_paths["$dir_name"]="$path"
+            fi
+        fi
     done < <(find_compose_projects)
     
     # Get containers grouped by project
@@ -166,10 +216,14 @@ show_dashboard() {
                 "$index" "$indicator" "$project" "$status_text"
             echo ""
             
-            MENU_MAP[$index]="PROJECT|$project|${project_paths[$project]}"
+            # IMPROVED: Store project with better path resolution
+            local proj_path="${project_paths[$project]}"
+            if [ -z "$proj_path" ]; then
+                proj_path=$(find_project_path "$project")
+            fi
+            MENU_MAP[$index]="PROJECT|$project|$proj_path"
             ((index++))
         done
-        
         echo ""
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
@@ -201,7 +255,6 @@ show_dashboard() {
             MENU_MAP[$index]="CONTAINER|$name"
             ((index++))
         done
-        
         echo ""
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
@@ -246,6 +299,7 @@ show_container_actions() {
         
         # Get container state
         local state=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
+        
         if [ "$state" = "running" ]; then
             echo -e "    Status:  ${GREEN}${BOLD}●  RUNNING${NC}"
         else
@@ -257,9 +311,11 @@ show_container_actions() {
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    AVAILABLE ACTIONS${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}docker logs${NC}               ${DIM}View container logs${NC}"
         echo ""
         
@@ -348,18 +404,47 @@ show_container_actions() {
     done
 }
 
-# Project actions menu
+# Project actions menu - IMPROVED
 show_project_actions() {
     local project=$1
     local project_path=$2
     
-    # Find path if not provided
+    # IMPROVED: Better path finding logic
     if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
-        project_path=$(find_compose_projects | grep -m1 "/${project}$")
+        echo ""
+        echo -e "    ${YELLOW}Searching for project directory...${NC}"
+        project_path=$(find_project_path "$project")
+        
+        if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
+            echo -e "    ${RED}${CROSS} Project directory not found for: ${project}${NC}"
+            echo ""
+            echo -e "    ${DIM}Trying to locate compose files...${NC}"
+            
+            # List all found compose directories for debugging
+            local all_dirs=$(find_compose_projects)
+            if [ -n "$all_dirs" ]; then
+                echo -e "    ${DIM}Found compose directories:${NC}"
+                echo "$all_dirs" | while read -r dir; do
+                    echo -e "        ${DIM}- $dir${NC}"
+                done
+            fi
+            
+            press_enter
+            return
+        fi
     fi
     
-    if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
-        echo -e "    ${RED}${CROSS} Project directory not found${NC}"
+    # Verify compose file exists
+    local compose_file=""
+    for file in "docker-compose.yml" "docker-compose.yaml" "compose.yml" "compose.yaml"; do
+        if [ -f "$project_path/$file" ]; then
+            compose_file="$file"
+            break
+        fi
+    done
+    
+    if [ -z "$compose_file" ]; then
+        echo -e "    ${RED}${CROSS} No compose file found in: ${project_path}${NC}"
         press_enter
         return
     fi
@@ -380,6 +465,7 @@ show_project_actions() {
         IFS='|' read -r total running <<< "$status_info"
         
         echo -e "    Path:    ${DIM}${project_path}${NC}"
+        echo -e "    File:    ${DIM}${compose_file}${NC}"
         echo ""
         
         if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
@@ -395,9 +481,11 @@ show_project_actions() {
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    AVAILABLE ACTIONS${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}docker compose logs${NC}                  ${DIM}View logs${NC}"
         echo ""
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}docker compose pull + up -d${NC}         ${GREEN}${DIM}Update & recreate${NC}"
@@ -503,9 +591,11 @@ view_container_logs() {
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    SELECT TIME RANGE${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}"
         echo ""
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Today${NC}"
@@ -576,7 +666,6 @@ view_container_logs() {
 # View project logs
 view_project_logs() {
     local project_path=$1
-    
     cd "$project_path" || return
     
     while true; do
@@ -588,9 +677,11 @@ view_project_logs() {
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    SELECT TIME RANGE${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}"
         echo ""
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Today${NC}"
@@ -679,29 +770,35 @@ clean_docker() {
         echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    CURRENT DISK USAGE${NC}"
         echo ""
         docker system df | sed 's/^/    /'
         echo ""
         echo ""
+        
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    SELECT CLEANUP LEVEL${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Basic Cleanup${NC}"
         echo ""
         echo -e "            ${DIM}Removes: stopped containers, unused networks, dangling images${NC}"
         echo -e "            ${GREEN}Safe - Running containers protected${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${ORANGE}Deep Cleanup${NC}"
         echo ""
         echo -e "            ${DIM}Removes: ALL unused images (old versions, unused pulls)${NC}"
         echo -e "            ${ORANGE}Reclaims ALL reclaimable space shown above${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back to main menu${NC}"
         echo ""
         echo ""
@@ -734,6 +831,7 @@ basic_cleanup() {
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
+    
     echo -e "${YELLOW}${BOLD}    This will remove:${NC}"
     echo ""
     echo -e "        ${DOT}  All stopped containers"
@@ -745,6 +843,7 @@ basic_cleanup() {
     echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers and their images are protected${NC}"
     echo ""
     echo ""
+    
     read -p "$(echo -e "    ${YELLOW}${BOLD}Proceed? (y/N): ${NC}")" confirm
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -756,6 +855,7 @@ basic_cleanup() {
         echo -e "    ${GREEN}${BOLD}${CHECK}  Basic cleanup complete${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
         echo ""
         docker system df | sed 's/^/    /'
@@ -783,6 +883,7 @@ deep_cleanup() {
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
+    
     echo -e "${YELLOW}${BOLD}    This will remove:${NC}"
     echo ""
     echo -e "        ${DOT}  All stopped containers"
@@ -799,6 +900,7 @@ deep_cleanup() {
     echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers are protected${NC}"
     echo ""
     echo ""
+    
     read -p "$(echo -e "    ${ORANGE}${BOLD}Proceed with deep cleanup? (y/N): ${NC}")" confirm
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -810,6 +912,7 @@ deep_cleanup() {
         echo -e "    ${GREEN}${BOLD}${CHECK}  Deep cleanup complete${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
         echo ""
         docker system df | sed 's/^/    /'
@@ -861,7 +964,6 @@ main() {
             [0-9]*)
                 if [ -n "${MENU_MAP[$choice]}" ]; then
                     IFS='|' read -r type name path <<< "${MENU_MAP[$choice]}"
-                    
                     if [ "$type" = "PROJECT" ]; then
                         show_project_actions "$name" "$path"
                     elif [ "$type" = "CONTAINER" ]; then
