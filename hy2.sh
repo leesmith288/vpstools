@@ -76,12 +76,19 @@ edit_config() {
         return
     fi
 
-    local editor="nano"
-    if ! command -v nano >/dev/null 2>&1; then
+    # Check for available editors
+    local editor=""
+    if command -v nano >/dev/null 2>&1; then
+        editor="nano"
+    elif command -v vim >/dev/null 2>&1; then
+        editor="vim"
+    elif command -v vi >/dev/null 2>&1; then
         editor="vi"
+    else
         echo
-        echo -e "  ${YELLOW}${BOLD}Using vi as editor (nano not found).${NC}"
+        echo -e "  ${RED}${BOLD}No text editor found (nano, vim, or vi).${NC}"
         echo
+        return
     fi
 
     echo
@@ -93,18 +100,25 @@ edit_config() {
     echo -e "  ${YELLOW}${BOLD}Press Enter to open editor, or Ctrl+C to cancel${NC}"
     read -r
     
-    sudo $editor /etc/hysteria/config.yaml
-    
-    echo
-    echo -e "  ${GREEN}${BOLD}Config file closed.${NC}"
-    echo
-    echo -n -e "  ${BOLD}Restart service to apply changes? (y/n): ${NC}"
-    read -r choice
-    if [[ $choice =~ ^[Yy]$ ]]; then
-        sudo systemctl restart hysteria-server
-        echo -e "  ${GREEN}${BOLD}✅ Service restarted${NC}"
+    if [[ -f /etc/hysteria/config.yaml ]]; then
+        sudo $editor /etc/hysteria/config.yaml
+        echo
+        echo -e "  ${GREEN}${BOLD}Config file closed.${NC}"
+        echo
+        echo -n -e "  ${BOLD}Restart service to apply changes? (y/n): ${NC}"
+        read -r choice
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            sudo systemctl restart hysteria-server
+            if systemctl is-active --quiet hysteria-server; then
+                echo -e "  ${GREEN}${BOLD}✅ Service restarted successfully${NC}"
+            else
+                echo -e "  ${RED}${BOLD}❌ Service restart failed${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}${BOLD}⚠ Remember to restart service later for changes to take effect${NC}"
+        fi
     else
-        echo -e "  ${YELLOW}${BOLD}⚠ Remember to restart service later for changes to take effect${NC}"
+        echo -e "  ${RED}${BOLD}Config file not found at /etc/hysteria/config.yaml${NC}"
     fi
     echo
 }
@@ -139,7 +153,7 @@ restart_service() {
     echo
 }
 
-# Function to update Hysteria2
+# Function to update Hysteria2 - FIXED
 update_hy2() {
     if ! is_installed; then
         echo
@@ -157,18 +171,33 @@ update_hy2() {
     echo -e "  ${YELLOW}${BOLD}Your config will be preserved${NC}"
     echo
     
-    sudo bash <(curl -fsSL https://get.hy2.sh/)
-    local code=$?
+    # Download the install script to a temporary file first
+    local temp_script="/tmp/hysteria_install_$$.sh"
     
-    echo
-    if [ $code -eq 0 ]; then
-        echo -e "  ${GREEN}${BOLD}✅ Update/Install completed${NC}"
+    if curl -fsSL https://get.hy2.sh/ -o "$temp_script"; then
+        chmod +x "$temp_script"
+        sudo bash "$temp_script"
+        local code=$?
+        rm -f "$temp_script"
+        
         echo
-        echo -e "  ${CYAN}${BOLD}Restarting service...${NC}"
-        sudo systemctl restart hysteria-server
-        echo -e "  ${GREEN}${BOLD}✅ Service restarted${NC}"
+        if [ $code -eq 0 ]; then
+            echo -e "  ${GREEN}${BOLD}✅ Update/Install completed${NC}"
+            echo
+            echo -e "  ${CYAN}${BOLD}Restarting service...${NC}"
+            sudo systemctl daemon-reload
+            sudo systemctl restart hysteria-server
+            if systemctl is-active --quiet hysteria-server; then
+                echo -e "  ${GREEN}${BOLD}✅ Service restarted${NC}"
+            else
+                echo -e "  ${YELLOW}${BOLD}⚠ Service not running. Check configuration.${NC}"
+            fi
+        else
+            echo -e "  ${RED}${BOLD}❌ Installation script failed${NC}"
+        fi
     else
-        echo -e "  ${RED}${BOLD}❌ Update failed${NC}"
+        echo -e "  ${RED}${BOLD}❌ Failed to download installation script${NC}"
+        echo -e "  ${YELLOW}${BOLD}Check your internet connection${NC}"
     fi
     echo
 }
@@ -185,10 +214,15 @@ view_recent_logs() {
     echo
     echo -e "  ${BLUE}${BOLD}═══ RECENT LOGS (Last 30 lines) ═══${NC}"
     echo
-    sudo journalctl -u hysteria-server --no-pager -n 30
+    
+    if systemctl is-enabled hysteria-server >/dev/null 2>&1; then
+        sudo journalctl -u hysteria-server --no-pager -n 30
+    else
+        echo -e "  ${YELLOW}${BOLD}Service is not enabled or logs are not available${NC}"
+    fi
+    
     echo
-    echo -e "  ${CYAN}${BOLD}Tip: For live logs, run:${NC}"
-    echo -e "  ${BOLD}sudo journalctl -u hysteria-server -f${NC}"
+    echo -e "  ${CYAN}${BOLD}Tip: For live logs, use option 6${NC}"
     echo
 }
 
@@ -207,7 +241,13 @@ view_live_logs() {
     echo -e "  ${YELLOW}${BOLD}Press Ctrl+C to stop viewing logs${NC}"
     echo
     sleep 2
-    sudo journalctl -u hysteria-server -f
+    
+    if systemctl is-enabled hysteria-server >/dev/null 2>&1; then
+        sudo journalctl -u hysteria-server -f
+    else
+        echo -e "  ${RED}${BOLD}Service is not enabled or logs are not available${NC}"
+    fi
+    echo
 }
 
 # Function to show menu with better spacing
