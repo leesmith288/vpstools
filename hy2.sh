@@ -17,12 +17,15 @@ NC='\033[0m' # No Color
 # Clear screen for clean start
 clear
 
-# Function to print header
+# Function to print header with better spacing
 print_header() {
+    echo
     echo -e "${CYAN}${BOLD}"
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║                  ${PURPLE}HYSTERIA2 ${CYAN}MANAGEMENT TOOL${NC}${CYAN}${BOLD}                  ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo "╔══════════════════════════════════════════════════════════════════════╗"
+    echo "║                                                                      ║"
+    echo "║                  ${PURPLE}HYSTERIA2 ${CYAN}MANAGEMENT TOOL                         ║"
+    echo "║                                                                      ║"
+    echo "╚══════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo
 }
@@ -32,77 +35,146 @@ is_installed() {
     command -v hysteria >/dev/null 2>&1 && [[ -f /etc/hysteria/config.yaml ]]
 }
 
-# Function to get status summary
-get_status() {
+# Function to get quick status (simplified)
+get_quick_status() {
     if ! is_installed; then
-        echo -e "${RED}${BOLD}❌ Hysteria2 is NOT installed.${NC}"
+        echo -e "  ${RED}${BOLD}❌ Hysteria2 is NOT installed${NC}"
+        echo
         return 1
     fi
 
     local status
     if systemctl is-active --quiet hysteria-server; then
-        status="${GREEN}${BOLD}🟢 ACTIVE (running)${NC}"
+        status="${GREEN}${BOLD}🟢 RUNNING${NC}"
+        echo -e "  ${CYAN}${BOLD}Service Status: ${NC}$status"
+        
+        # Show brief info
+        local uptime=$(systemctl show hysteria-server --property=ActiveEnterTimestamp --value 2>/dev/null)
+        if [[ -n "$uptime" ]]; then
+            echo -e "  ${CYAN}${BOLD}Started:        ${NC}$(date -d "$uptime" '+%Y-%m-%d %H:%M:%S')"
+        fi
+        
+        # Show port if available
+        local port=$(grep -E "^\s*listen:" /etc/hysteria/config.yaml 2>/dev/null | head -1 | sed 's/.*:\([0-9]*\).*/\1/')
+        if [[ -n "$port" ]]; then
+            echo -e "  ${CYAN}${BOLD}Port:           ${NC}$port"
+        fi
     else
-        status="${YELLOW}${BOLD}🟡 INACTIVE (stopped/failed)${NC}"
+        status="${YELLOW}${BOLD}🟡 STOPPED${NC}"
+        echo -e "  ${CYAN}${BOLD}Service Status: ${NC}$status"
     fi
-
-    echo -e "${CYAN}${BOLD}Status:${NC} $status"
     echo
 }
 
-# Function to show detailed status
-show_detailed_status() {
+# Function to show service information (replaces detailed status)
+show_service_info() {
     if ! is_installed; then
-        echo -e "${YELLOW}Hysteria2 not installed. Use 'Install Hysteria2' option first.${NC}"
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed. Use 'Install Hysteria2' option first.${NC}"
+        echo
         return
     fi
 
-    echo -e "${BLUE}${BOLD}=== DETAILED HYSTERIA2 STATUS ===${NC}"
     echo
-    systemctl status hysteria-server --no-pager -l
+    echo -e "  ${BLUE}${BOLD}═══ SERVICE INFORMATION ═══${NC}"
+    echo
+    
+    # Get service status
+    local is_active=$(systemctl is-active hysteria-server 2>/dev/null)
+    local is_enabled=$(systemctl is-enabled hysteria-server 2>/dev/null)
+    
+    echo -e "  ${BOLD}Service:${NC}        hysteria-server"
+    echo -e "  ${BOLD}Active:${NC}         $([ "$is_active" = "active" ] && echo -e "${GREEN}$is_active${NC}" || echo -e "${RED}$is_active${NC}")"
+    echo -e "  ${BOLD}Enabled:${NC}        $([ "$is_enabled" = "enabled" ] && echo -e "${GREEN}$is_enabled${NC}" || echo -e "${YELLOW}$is_enabled${NC}")"
+    
+    # Get version
+    local version=$(hysteria version 2>/dev/null | head -1)
+    if [[ -n "$version" ]]; then
+        echo -e "  ${BOLD}Version:${NC}        $version"
+    fi
+    
+    # Get config file info
+    if [[ -f /etc/hysteria/config.yaml ]]; then
+        local config_size=$(du -h /etc/hysteria/config.yaml | cut -f1)
+        local config_modified=$(stat -c %y /etc/hysteria/config.yaml | cut -d'.' -f1)
+        echo -e "  ${BOLD}Config File:${NC}    /etc/hysteria/config.yaml"
+        echo -e "  ${BOLD}Config Size:${NC}    $config_size"
+        echo -e "  ${BOLD}Last Modified:${NC}  $config_modified"
+    fi
+    
+    echo
+    echo -e "  ${CYAN}Use 'View Recent Logs' to see service messages${NC}"
     echo
 }
 
-# Function to edit config
+# Function to edit config with improved UX
 edit_config() {
     if ! is_installed; then
-        echo -e "${YELLOW}Hysteria2 not installed. Install first.${NC}"
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed. Install first.${NC}"
+        echo
         return
     fi
 
     local editor="nano"
     if ! command -v nano >/dev/null 2>&1; then
         editor="vi"
-        echo -e "${YELLOW}Using vi as editor (nano not found).${NC}"
+        echo
+        echo -e "  ${YELLOW}Using vi as editor (nano not found).${NC}"
+        echo
     fi
 
-    echo -e "${BLUE}${BOLD}=== EDITING CONFIG (/etc/hysteria/config.yaml) ===${NC}"
-    echo "After editing, save and exit. The service will NOT auto-restart."
     echo
+    echo -e "  ${BLUE}${BOLD}═══ EDITING CONFIGURATION ═══${NC}"
+    echo
+    echo -e "  ${CYAN}File: ${NC}/etc/hysteria/config.yaml"
+    echo -e "  ${CYAN}Editor: ${NC}$editor"
+    echo
+    echo -e "  ${YELLOW}Press Enter to open editor, or Ctrl+C to cancel${NC}"
+    read -r
+    
     sudo $editor /etc/hysteria/config.yaml
+    
     echo
-    echo -e "${GREEN}Config saved. Restart service to apply changes? (y/n)${NC}"
+    echo -e "  ${GREEN}Config file closed.${NC}"
+    echo
+    echo -e "  ${BOLD}Restart service to apply changes? (y/n):${NC} "
     read -r choice
     if [[ $choice =~ ^[Yy]$ ]]; then
         sudo systemctl restart hysteria-server
-        echo -e "${GREEN}Service restarted.${NC}"
+        echo -e "  ${GREEN}✅ Service restarted${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Remember to restart service later for changes to take effect${NC}"
     fi
+    echo
 }
 
-# Function to restart service
+# Function to restart service with better feedback
 restart_service() {
     if ! is_installed; then
-        echo -e "${YELLOW}Hysteria2 not installed.${NC}"
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed.${NC}"
+        echo
         return
     fi
 
-    echo -e "${BLUE}${BOLD}=== RESTARTING HYSTERIA2 ===${NC}"
-    sudo systemctl restart hysteria-server
-    local code=$?
-    if [ $code -eq 0 ]; then
-        echo -e "${GREEN}✅ Service restarted successfully.${NC}"
+    echo
+    echo -e "  ${BLUE}${BOLD}═══ RESTARTING SERVICE ═══${NC}"
+    echo
+    echo -e "  ${CYAN}Stopping service...${NC}"
+    sudo systemctl stop hysteria-server
+    sleep 1
+    
+    echo -e "  ${CYAN}Starting service...${NC}"
+    sudo systemctl start hysteria-server
+    sleep 2
+    
+    if systemctl is-active --quiet hysteria-server; then
+        echo -e "  ${GREEN}✅ Service restarted successfully${NC}"
     else
-        echo -e "${RED}❌ Restart failed. Check status.${NC}"
+        echo -e "  ${RED}❌ Service failed to start${NC}"
+        echo
+        echo -e "  ${YELLOW}Check logs for details (option 5)${NC}"
     fi
     echo
 }
@@ -110,66 +182,104 @@ restart_service() {
 # Function to update Hysteria2
 update_hy2() {
     if ! is_installed; then
-        echo -e "${YELLOW}Hysteria2 not installed. This will install the latest version.${NC}"
-        echo "Continue? (y/n)"
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed. This will install the latest version.${NC}"
+        echo
+        echo -e "  ${BOLD}Continue? (y/n):${NC} "
         read -r choice
         if ! [[ $choice =~ ^[Yy]$ ]]; then return; fi
     fi
 
-    echo -e "${BLUE}${BOLD}=== UPDATING/INSTALLING HYSTERIA2 ===${NC}"
-    echo "This will download and install/upgrade to the latest version."
-    echo "Your config will be preserved."
     echo
+    echo -e "  ${BLUE}${BOLD}═══ UPDATING/INSTALLING HYSTERIA2 ═══${NC}"
+    echo
+    echo -e "  ${CYAN}Downloading latest version...${NC}"
+    echo -e "  ${YELLOW}Your config will be preserved${NC}"
+    echo
+    
     sudo bash <(curl -fsSL https://get.hy2.sh/)
     local code=$?
+    
+    echo
     if [ $code -eq 0 ]; then
-        echo -e "${GREEN}✅ Update/Install completed.${NC}"
-        echo -e "${YELLOW}Restarting service...${NC}"
+        echo -e "  ${GREEN}✅ Update/Install completed${NC}"
+        echo
+        echo -e "  ${CYAN}Restarting service...${NC}"
         sudo systemctl restart hysteria-server
+        echo -e "  ${GREEN}✅ Service restarted${NC}"
     else
-        echo -e "${RED}❌ Update failed.${NC}"
+        echo -e "  ${RED}❌ Update failed${NC}"
     fi
     echo
 }
 
-# Function to view logs
-view_logs() {
+# Function to view recent logs (simplified)
+view_recent_logs() {
     if ! is_installed; then
-        echo -e "${YELLOW}Hysteria2 not installed.${NC}"
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed.${NC}"
+        echo
         return
     fi
 
-    echo -e "${BLUE}${BOLD}=== HYSTERIA2 LOGS (Last 50 lines) ===${NC}"
-    echo "Press Ctrl+C to exit logs."
     echo
-    sudo journalctl -u hysteria-server --no-pager -n 50
+    echo -e "  ${BLUE}${BOLD}═══ RECENT LOGS (Last 30 lines) ═══${NC}"
     echo
-    echo -e "${YELLOW}For live logs: journalctl -u hysteria-server -f${NC}"
+    sudo journalctl -u hysteria-server --no-pager -n 30
+    echo
+    echo -e "  ${CYAN}Tip: For live logs, run:${NC}"
+    echo -e "  ${BOLD}sudo journalctl -u hysteria-server -f${NC}"
+    echo
 }
 
-# Function to show menu
+# Function to view live logs
+view_live_logs() {
+    if ! is_installed; then
+        echo
+        echo -e "  ${YELLOW}Hysteria2 not installed.${NC}"
+        echo
+        return
+    fi
+
+    echo
+    echo -e "  ${BLUE}${BOLD}═══ LIVE LOGS ═══${NC}"
+    echo
+    echo -e "  ${YELLOW}Press Ctrl+C to stop viewing logs${NC}"
+    echo
+    sleep 2
+    sudo journalctl -u hysteria-server -f
+}
+
+# Function to show menu with better spacing
 show_menu() {
-    echo -e "${PURPLE}${BOLD}=== MAIN MENU ===${NC}"
+    echo -e "  ${PURPLE}${BOLD}═══ MAIN MENU ═══${NC}"
     echo
-    echo -e "  ${CYAN}1.${NC} ${BOLD}Status Summary${NC}"
-    echo -e "  ${CYAN}2.${NC} ${BOLD}Detailed Status${NC}"
-    echo -e "  ${CYAN}3.${NC} ${BOLD}Edit Config${NC}"
-    echo -e "  ${CYAN}4.${NC} ${BOLD}Restart Service${NC}"
-    echo -e "  ${CYAN}5.${NC} ${BOLD}Update/Install Hysteria2${NC}"
-    echo -e "  ${CYAN}6.${NC} ${BOLD}View Logs${NC}"
-    echo -e "  ${CYAN}7.${NC} ${BOLD}Exit${NC}"
+    echo -e "    ${CYAN}${BOLD}1.${NC}  Service Information"
     echo
-    echo -e "${YELLOW}Select an option (1-7): ${NC}"
+    echo -e "    ${CYAN}${BOLD}2.${NC}  Edit Configuration"
+    echo
+    echo -e "    ${CYAN}${BOLD}3.${NC}  Restart Service"
+    echo
+    echo -e "    ${CYAN}${BOLD}4.${NC}  Update/Install Hysteria2"
+    echo
+    echo -e "    ${CYAN}${BOLD}5.${NC}  View Recent Logs"
+    echo
+    echo -e "    ${CYAN}${BOLD}6.${NC}  View Live Logs"
+    echo
+    echo -e "    ${CYAN}${BOLD}7.${NC}  Exit"
+    echo
+    echo -e "  ${YELLOW}${BOLD}Select an option (1-7):${NC} "
 }
 
 # Main loop
 main() {
     print_header
-    get_status
+    get_quick_status
 
     while true; do
         echo
-        echo "────────────────────────────────────────────────────────"
+        echo "  ════════════════════════════════════════════════════════════════"
+        echo
         show_menu
         read -r choice
 
@@ -177,41 +287,44 @@ main() {
             1)
                 clear
                 print_header
-                get_status
+                show_service_info
                 ;;
             2)
                 clear
                 print_header
-                show_detailed_status
+                edit_config
                 ;;
             3)
                 clear
                 print_header
-                edit_config
+                restart_service
+                get_quick_status
                 ;;
             4)
                 clear
                 print_header
-                restart_service
-                get_status
+                update_hy2
+                get_quick_status
                 ;;
             5)
                 clear
                 print_header
-                update_hy2
-                get_status
+                view_recent_logs
                 ;;
             6)
                 clear
                 print_header
-                view_logs
+                view_live_logs
                 ;;
             7)
-                echo -e "${GREEN}${BOLD}Goodbye! 🚀${NC}"
+                echo
+                echo -e "  ${GREEN}${BOLD}Goodbye! 🚀${NC}"
+                echo
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Invalid option. Please try again.${NC}"
+                echo
+                echo -e "  ${RED}Invalid option. Please try again.${NC}"
                 sleep 1
                 ;;
         esac
