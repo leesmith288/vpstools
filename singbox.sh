@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # Singbox Management Script
@@ -68,7 +67,60 @@ show_service_status() {
     echo
 }
 
-# Function to edit config
+# Function to validate and show config errors in detail
+validate_config_detailed() {
+    local config_file="$1"
+    local temp_error="/tmp/sing-box-error-$$.log"
+    
+    echo
+    echo -e "  ${CYAN}${BOLD}Validating configuration...${NC}"
+    echo
+    
+    # Run validation and capture both stdout and stderr
+    if sudo sing-box check -c "$config_file" > "$temp_error" 2>&1; then
+        echo -e "  ${GREEN}${BOLD}✅ Configuration is valid${NC}"
+        rm -f "$temp_error"
+        return 0
+    else
+        echo -e "  ${RED}${BOLD}❌ Configuration has errors:${NC}"
+        echo
+        echo -e "  ${YELLOW}${BOLD}━━━ ERROR DETAILS ━━━${NC}"
+        echo
+        
+        # Display the error with proper formatting
+        while IFS= read -r line; do
+            # Highlight line numbers and error keywords
+            if echo "$line" | grep -q "error\|Error\|ERROR"; then
+                echo -e "  ${RED}${BOLD}► $line${NC}"
+            elif echo "$line" | grep -q "line\|Line\|position"; then
+                echo -e "  ${YELLOW}${BOLD}► $line${NC}"
+            else
+                echo -e "  ${CYAN}  $line${NC}"
+            fi
+        done < "$temp_error"
+        
+        echo
+        echo -e "  ${YELLOW}${BOLD}━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo
+        
+        # Try to provide helpful hints based on common errors
+        if grep -q "unexpected end of JSON input" "$temp_error" 2>/dev/null; then
+            echo -e "  ${PURPLE}${BOLD}💡 Hint:${NC} ${BOLD}Missing closing bracket } or ]${NC}"
+        elif grep -q "invalid character" "$temp_error" 2>/dev/null; then
+            echo -e "  ${PURPLE}${BOLD}💡 Hint:${NC} ${BOLD}Check for missing or extra commas, or wrong quotes${NC}"
+        elif grep -q "cannot unmarshal" "$temp_error" 2>/dev/null; then
+            echo -e "  ${PURPLE}${BOLD}💡 Hint:${NC} ${BOLD}Wrong value type (e.g., string where number expected)${NC}"
+        elif grep -q "duplicate key" "$temp_error" 2>/dev/null; then
+            echo -e "  ${PURPLE}${BOLD}💡 Hint:${NC} ${BOLD}Same configuration key used twice${NC}"
+        fi
+        
+        rm -f "$temp_error"
+        echo
+        return 1
+    fi
+}
+
+# Function to edit config with enhanced error reporting
 edit_config() {
     if ! is_installed; then
         echo
@@ -110,35 +162,81 @@ edit_config() {
         sudo $editor /etc/sing-box/config.json
         echo
         echo -e "  ${GREEN}${BOLD}Config file closed.${NC}"
-        echo
         
-        # Check config validity
-        echo -e "  ${CYAN}${BOLD}Checking configuration...${NC}"
-        if sudo sing-box check -c /etc/sing-box/config.json >/dev/null 2>&1; then
-            echo -e "  ${GREEN}${BOLD}✅ Configuration is valid${NC}"
+        # Validate the edited configuration
+        if validate_config_detailed "/etc/sing-box/config.json"; then
             echo
             echo -n -e "  ${BOLD}Restart service to apply changes? (y/n): ${NC}"
             read -r choice
             if [[ $choice =~ ^[Yy]$ ]]; then
                 sudo systemctl restart sing-box
+                sleep 2
                 if systemctl is-active --quiet sing-box; then
                     echo -e "  ${GREEN}${BOLD}✅ Service restarted successfully${NC}"
                 else
-                    echo -e "  ${RED}${BOLD}❌ Service restart failed${NC}"
-                    echo -e "  ${YELLOW}${BOLD}Restoring backup...${NC}"
-                    sudo cp /etc/sing-box/config.json.backup /etc/sing-box/config.json
-                    sudo systemctl restart sing-box
+                    echo -e "  ${RED}${BOLD}❌ Service failed to start${NC}"
+                    echo
+                    echo -e "  ${YELLOW}${BOLD}Checking service logs for errors...${NC}"
+                    echo
+                    echo -e "  ${YELLOW}${BOLD}━━━ SERVICE ERROR LOGS ━━━${NC}"
+                    echo
+                    sudo journalctl -u sing-box --no-pager -n 20 | tail -15
+                    echo
+                    echo -e "  ${YELLOW}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                    echo
+                    echo -n -e "  ${BOLD}Restore backup config? (y/n): ${NC}"
+                    read -r restore
+                    if [[ $restore =~ ^[Yy]$ ]]; then
+                        sudo cp /etc/sing-box/config.json.backup /etc/sing-box/config.json
+                        sudo systemctl restart sing-box
+                        echo -e "  ${GREEN}${BOLD}Backup restored and service restarted${NC}"
+                    fi
                 fi
             else
                 echo -e "  ${YELLOW}${BOLD}⚠ Remember to restart service later for changes to take effect${NC}"
             fi
         else
-            echo -e "  ${RED}${BOLD}❌ Configuration is invalid!${NC}"
-            echo -n -e "  ${BOLD}Restore backup? (y/n): ${NC}"
-            read -r restore
-            if [[ $restore =~ ^[Yy]$ ]]; then
-                sudo cp /etc/sing-box/config.json.backup /etc/sing-box/config.json
-                echo -e "  ${GREEN}${BOLD}Backup restored${NC}"
+            echo -n -e "  ${BOLD}Do you want to fix the errors now? (y/n): ${NC}"
+            read -r fix_now
+            if [[ $fix_now =~ ^[Yy]$ ]]; then
+                # Re-open editor to fix errors
+                echo
+                echo -e "  ${CYAN}${BOLD}Opening editor to fix errors...${NC}"
+                echo -e "  ${YELLOW}${BOLD}Pay attention to the error details shown above${NC}"
+                echo
+                echo -e "  ${YELLOW}${BOLD}Press Enter to continue...${NC}"
+                read -r
+                sudo $editor /etc/sing-box/config.json
+                
+                # Re-validate after fixing
+                if validate_config_detailed "/etc/sing-box/config.json"; then
+                    echo
+                    echo -n -e "  ${BOLD}Config fixed! Restart service now? (y/n): ${NC}"
+                    read -r restart_fixed
+                    if [[ $restart_fixed =~ ^[Yy]$ ]]; then
+                        sudo systemctl restart sing-box
+                        sleep 2
+                        if systemctl is-active --quiet sing-box; then
+                            echo -e "  ${GREEN}${BOLD}✅ Service restarted successfully${NC}"
+                        else
+                            echo -e "  ${RED}${BOLD}❌ Service still failing. Check logs.${NC}"
+                        fi
+                    fi
+                else
+                    echo -n -e "  ${BOLD}Still has errors. Restore backup? (y/n): ${NC}"
+                    read -r restore
+                    if [[ $restore =~ ^[Yy]$ ]]; then
+                        sudo cp /etc/sing-box/config.json.backup /etc/sing-box/config.json
+                        echo -e "  ${GREEN}${BOLD}Backup restored${NC}"
+                    fi
+                fi
+            else
+                echo -n -e "  ${BOLD}Restore backup config? (y/n): ${NC}"
+                read -r restore
+                if [[ $restore =~ ^[Yy]$ ]]; then
+                    sudo cp /etc/sing-box/config.json.backup /etc/sing-box/config.json
+                    echo -e "  ${GREEN}${BOLD}Backup restored${NC}"
+                fi
             fi
         fi
     else
@@ -159,6 +257,17 @@ restart_service() {
     echo
     echo -e "  ${BLUE}${BOLD}═══ RESTARTING SERVICE ═══${NC}"
     echo
+    
+    # First validate current config
+    if ! validate_config_detailed "/etc/sing-box/config.json"; then
+        echo -n -e "  ${BOLD}Config has errors. Continue restart anyway? (y/n): ${NC}"
+        read -r force_restart
+        if ! [[ $force_restart =~ ^[Yy]$ ]]; then
+            echo -e "  ${YELLOW}${BOLD}Restart cancelled${NC}"
+            return
+        fi
+    fi
+    
     echo -e "  ${CYAN}${BOLD}Stopping service...${NC}"
     sudo systemctl stop sing-box
     sleep 1
@@ -172,7 +281,11 @@ restart_service() {
     else
         echo -e "  ${RED}${BOLD}❌ Service failed to start${NC}"
         echo
-        echo -e "  ${YELLOW}${BOLD}Check logs for details (option 5)${NC}"
+        echo -e "  ${YELLOW}${BOLD}━━━ ERROR LOGS ━━━${NC}"
+        echo
+        sudo journalctl -u sing-box --no-pager -n 20 | tail -15
+        echo
+        echo -e "  ${YELLOW}${BOLD}━━━━━━━━━━━━━━━━━${NC}"
     fi
     echo
 }
@@ -366,7 +479,7 @@ view_live_logs() {
     echo
 }
 
-# Function to check configuration
+# Function to check configuration with detailed output
 check_config() {
     if ! is_installed; then
         echo
@@ -379,14 +492,17 @@ check_config() {
     echo -e "  ${BLUE}${BOLD}═══ CHECKING CONFIGURATION ═══${NC}"
     echo
     echo -e "  ${CYAN}${BOLD}Config file: ${NC}/etc/sing-box/config.json"
-    echo
     
-    if sudo sing-box check -c /etc/sing-box/config.json; then
+    validate_config_detailed "/etc/sing-box/config.json"
+    
+    # Also show a preview of the config structure
+    if command -v jq >/dev/null 2>&1; then
         echo
-        echo -e "  ${GREEN}${BOLD}✅ Configuration is valid${NC}"
-    else
+        echo -e "  ${CYAN}${BOLD}Configuration Structure:${NC}"
         echo
-        echo -e "  ${RED}${BOLD}❌ Configuration has errors${NC}"
+        sudo jq -r 'keys[]' /etc/sing-box/config.json 2>/dev/null | while read -r key; do
+            echo -e "  ${BOLD}• $key${NC}"
+        done
     fi
     echo
 }
