@@ -323,7 +323,7 @@ check_dns_status() {
     
     for domain in "${test_domains[@]}"; do
         echo -n "  Testing $domain... "
-        if getent hosts "$domain" >/dev/null 2>&1; then
+        if timeout 5 getent hosts "$domain" >/dev/null 2>&1; then
             local ip=$(getent hosts "$domain" 2>/dev/null | head -1 | awk '{print $1}')
             echo -e "${GREEN}✓${NC} ($ip)"
             ((success_count++))
@@ -354,7 +354,7 @@ test_dns_resolution() {
     
     # Test with system resolver
     echo -e "${BOLD}1. System DNS Resolution:${NC}"
-    local result=$(getent hosts "$domain" 2>/dev/null)
+    local result=$(timeout 5 getent hosts "$domain" 2>/dev/null)
     if [ -n "$result" ]; then
         echo "$result" | while IFS= read -r line; do
             local ip=$(echo "$line" | awk '{print $1}')
@@ -392,7 +392,7 @@ test_dns_resolution() {
             echo -n "   ${BOLD}$name ($server):${NC} "
             
             if [ "$dns_tool" = "dig" ]; then
-                if result=$(dig +short "$domain" @"$server" 2>/dev/null | head -1); then
+                if result=$(timeout 5 dig +short "$domain" @"$server" 2>/dev/null | head -1); then
                     if [ -n "$result" ]; then
                         echo -e "${GREEN}✓${NC} $result"
                     else
@@ -402,7 +402,7 @@ test_dns_resolution() {
                     echo -e "${RED}✗${NC} Failed"
                 fi
             else
-                if result=$(nslookup "$domain" "$server" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | tail -1 | awk '{print $2}'); then
+                if result=$(timeout 5 nslookup "$domain" "$server" 2>/dev/null | grep -A1 "Name:" | grep "Address:" | tail -1 | awk '{print $2}'); then
                     if [ -n "$result" ]; then
                         echo -e "${GREEN}✓${NC} $result"
                     else
@@ -419,7 +419,7 @@ test_dns_resolution() {
         # Fallback to ping test
         echo -e "\n${BOLD}3. Connectivity Test:${NC}"
         echo -n "   Ping test for $domain: "
-        if ping -c 1 -W 2 "$domain" &>/dev/null; then
+        if timeout 5 ping -c 1 -W 2 "$domain" &>/dev/null; then
             local ip=$(ping -c 1 "$domain" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
             echo -e "${GREEN}✓${NC} Reachable at $ip"
         else
@@ -430,7 +430,7 @@ test_dns_resolution() {
     # DNS response time test
     echo -e "\n${BOLD}3. DNS Response Time:${NC}"
     if command -v dig &> /dev/null; then
-        local query_time=$(dig "$domain" | grep "Query time:" | awk '{print $4}')
+        local query_time=$(timeout 5 dig "$domain" | grep "Query time:" | awk '{print $4}')
         if [ -n "$query_time" ]; then
             echo -e "   Query time: ${YELLOW}${query_time} ms${NC}"
             if [ "$query_time" -lt 50 ]; then
@@ -520,39 +520,57 @@ change_dns_servers() {
             return 1
         fi
         
-        # Backup current configuration
+        # Backup current configuration with timeout
         echo -e "\n${BOLD}Creating backup...${NC}"
         local backup_file="/etc/resolv.conf.backup.$(date +%Y%m%d_%H%M%S)"
-        sudo cp /etc/resolv.conf "$backup_file"
-        print_success "Backup saved to: $backup_file"
+        
+        # Use timeout and check if file exists first
+        if [ -f /etc/resolv.conf ]; then
+            if timeout 5 sudo cp /etc/resolv.conf "$backup_file" 2>/dev/null; then
+                print_success "Backup saved to: $backup_file"
+            else
+                print_warning "Could not create backup, but continuing..."
+            fi
+        else
+            print_warning "/etc/resolv.conf doesn't exist, creating new one..."
+        fi
         
         # Apply new DNS servers
         echo -e "\n${BOLD}Applying new DNS configuration...${NC}"
         
         # Check if resolv.conf is immutable
-        if lsattr /etc/resolv.conf 2>/dev/null | grep -q 'i'; then
+        if [ -f /etc/resolv.conf ] && lsattr /etc/resolv.conf 2>/dev/null | grep -q 'i'; then
             print_warning "/etc/resolv.conf is immutable, removing protection..."
-            sudo chattr -i /etc/resolv.conf
+            sudo chattr -i /etc/resolv.conf 2>/dev/null
         fi
         
-        # Write new configuration
+        # Create temporary file first
+        local temp_file="/tmp/resolv.conf.$$"
         {
             echo "# DNS Configuration - $(date)"
             echo "# Provider: $provider"
             echo "nameserver $dns1"
             [ -n "$dns2" ] && echo "nameserver $dns2"
             echo "options edns0 trust-ad"
-        } | sudo tee /etc/resolv.conf > /dev/null
+        } > "$temp_file"
         
-        print_success "DNS servers updated!"
+        # Move temporary file to /etc/resolv.conf
+        if sudo mv "$temp_file" /etc/resolv.conf 2>/dev/null; then
+            print_success "DNS servers updated!"
+        else
+            # Alternative method if mv fails
+            cat "$temp_file" | sudo tee /etc/resolv.conf > /dev/null
+            rm -f "$temp_file"
+            print_success "DNS servers updated!"
+        fi
         
-        # Test new configuration
+        # Test new configuration with timeout
         echo -e "\n${BOLD}Testing new DNS configuration...${NC}"
         local test_success=0
         
         for domain in google.com cloudflare.com; do
             echo -n "  Testing $domain... "
-            if getent hosts "$domain" >/dev/null 2>&1; then
+            if timeout 5 getent hosts "$domain" >/dev/null 2>&1; then
                 echo -e "${GREEN}✓${NC}"
                 ((test_success++))
             else
@@ -576,9 +594,11 @@ change_dns_servers() {
             fi
         else
             print_error "DNS resolution failed with new servers!"
-            echo -e "${YELLOW}Reverting to previous configuration...${NC}"
-            sudo cp "$backup_file" /etc/resolv.conf
-            print_success "Previous configuration restored"
+            if [ -f "$backup_file" ]; then
+                echo -e "${YELLOW}Reverting to previous configuration...${NC}"
+                sudo cp "$backup_file" /etc/resolv.conf
+                print_success "Previous configuration restored"
+            fi
         fi
     fi
 }
@@ -732,10 +752,10 @@ network_menu() {
                 
                 echo -e "\n${BOLD}Public IP:${NC}"
                 if command -v curl &> /dev/null; then
-                    local public_ip=$(curl -s -4 ifconfig.me 2>/dev/null)
+                    local public_ip=$(timeout 5 curl -s -4 ifconfig.me 2>/dev/null)
                     [ -n "$public_ip" ] && echo -e "  IPv4: ${YELLOW}$public_ip${NC}"
                     
-                    local public_ip6=$(curl -s -6 ifconfig.me 2>/dev/null)
+                    local public_ip6=$(timeout 5 curl -s -6 ifconfig.me 2>/dev/null)
                     [ -n "$public_ip6" ] && echo -e "  IPv6: ${YELLOW}$public_ip6${NC}"
                 else
                     echo -e "  ${DIM}Install curl to check public IP${NC}"
