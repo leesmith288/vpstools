@@ -503,7 +503,7 @@ check_status() {
     echo
 }
 
-# Function to view Xray logs
+# Function to view Xray logs - simplified and practical
 view_logs() {
     if ! is_xray_installed; then
         print_color $RED "    ❌ Xray is not installed."
@@ -511,13 +511,82 @@ view_logs() {
     fi
     
     echo
-    print_color $CYAN "    📜 Showing recent Xray logs"
-    print_color $YELLOW "    💡 Press 'q' to quit and return to menu"
+    print_color $CYAN "    📜 XRAY LOG VIEWER"
+    print_color $PURPLE "    ══════════════════════════════════════════════════"
     echo
-    sleep 2
+    print_color $YELLOW "    Select option:"
+    echo
+    print_color $CYAN "    1) View recent logs (last 50 lines)"
+    print_color $CYAN "    2) View recent errors only"
+    print_color $CYAN "    3) Live monitoring (Ctrl+C to stop)"
+    print_color $CYAN "    4) Back to main menu"
+    echo
     
-    # Using --no-pager to allow immediate return to menu
-    journalctl -u xray -n 50 --no-pager | less
+    read -p "    Choice [1-4]: " log_choice
+    
+    case $log_choice in
+        1)
+            echo
+            print_color $CYAN "    ═══════ RECENT LOGS (50 lines) ═══════"
+            echo
+            journalctl -u xray -n 50 --no-pager
+            echo
+            print_color $YELLOW "    ═══════ END OF LOGS ═══════"
+            ;;
+        2)
+            echo
+            print_color $CYAN "    ═══════ RECENT ERRORS ═══════"
+            echo
+            
+            # Get errors from last 200 lines
+            local error_logs=$(journalctl -u xray -n 200 --no-pager | grep -i "error\|failed\|fatal\|panic")
+            
+            if [ -n "$error_logs" ]; then
+                echo "$error_logs" | tail -20  # Show last 20 error lines
+                echo
+                print_color $YELLOW "    ═══════ END OF ERRORS ═══════"
+                echo
+                
+                # Simple error summary
+                local error_count=$(echo "$error_logs" | wc -l)
+                print_color $RED "    ⚠️  Found $error_count error(s) in recent logs"
+                
+                # Check for common critical errors
+                if echo "$error_logs" | grep -q "bind: address already in use"; then
+                    echo
+                    print_color $YELLOW "    💡 Port conflict detected - another service may be using the same port"
+                fi
+                
+                if echo "$error_logs" | grep -q "permission denied"; then
+                    echo
+                    print_color $YELLOW "    💡 Permission error detected - check file permissions"
+                fi
+                
+                if echo "$error_logs" | grep -q "config.*error\|invalid.*config"; then
+                    echo
+                    print_color $YELLOW "    💡 Configuration error detected - check your config file"
+                fi
+            else
+                print_color $GREEN "    ✅ No errors found in recent logs"
+            fi
+            echo
+            ;;
+        3)
+            echo
+            print_color $CYAN "    📡 LIVE LOG MONITORING"
+            print_color $YELLOW "    💡 Press Ctrl+C to stop"
+            print_color $PURPLE "    ══════════════════════════════════════════════════"
+            echo
+            sleep 1
+            journalctl -u xray -f
+            ;;
+        4)
+            return
+            ;;
+        *)
+            print_color $RED "    Invalid option"
+            ;;
+    esac
 }
 
 # Function to update Xray
