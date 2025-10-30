@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Caddy Manager - Part of VPS Tools Suite
 # Host as: caddy-manager.sh
 
@@ -29,6 +30,218 @@ ensure_caddy_held() {
         sleep 2
         return 0
     fi
+}
+
+# Function to check and install tree if needed
+ensure_tree_installed() {
+    if ! command -v tree &> /dev/null; then
+        echo -e "${YELLOW}Tree command not found. Installing...${NC}"
+        if sudo apt update && sudo apt install -y tree; then
+            echo -e "${GREEN}✓ Tree installed successfully${NC}"
+        else
+            echo -e "${RED}✗ Failed to install tree${NC}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Function to manage certificates
+manage_certificates() {
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    
+    # Ensure tree is installed
+    if ! ensure_tree_installed; then
+        echo -e "${RED}Cannot proceed without tree command${NC}"
+        echo -e "\n${YELLOW}Press Enter to return...${NC}"
+        read
+        return
+    fi
+    
+    CERT_DIR="/var/lib/caddy/.local/share/caddy/certificates"
+    
+    if [ ! -d "$CERT_DIR" ]; then
+        echo -e "${YELLOW}Certificate directory not found at: $CERT_DIR${NC}"
+        echo -e "${DIM}This might mean no certificates have been generated yet${NC}"
+        echo -e "\n${YELLOW}Press Enter to return...${NC}"
+        read
+        return
+    fi
+    
+    while true; do
+        clear
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+        
+        echo -e "${GREEN}${BOLD}Options:${NC}"
+        echo -e "${YELLOW}  1)${NC} 📂 View certificate tree structure"
+        echo -e "${YELLOW}  2)${NC} 📋 List all domains with certificates"
+        echo -e "${YELLOW}  3)${NC} 🔍 Show certificate details for a domain"
+        echo -e "${YELLOW}  4)${NC} 🗑️  Delete certificates for abandoned domain"
+        echo -e "${YELLOW}  5)${NC} 📊 Show certificate disk usage"
+        echo -e "\n${RED}  0)${NC} ↩️  Back to main menu\n"
+        
+        read -p "$(echo -e ${BOLD}Select option: ${NC})" cert_choice
+        
+        case $cert_choice in
+            1) # View certificate tree
+                echo -e "\n${CYAN}Certificate Directory Structure:${NC}\n"
+                sudo tree "$CERT_DIR" -I '.git|__pycache__'
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read
+                ;;
+                
+            2) # List all domains
+                echo -e "\n${CYAN}Domains with certificates:${NC}\n"
+                for acme_dir in "$CERT_DIR"/*/; do
+                    if [ -d "$acme_dir" ]; then
+                        echo -e "${GREEN}ACME Provider: $(basename "$acme_dir")${NC}"
+                        for domain_dir in "$acme_dir"*/; do
+                            if [ -d "$domain_dir" ]; then
+                                domain_name=$(basename "$domain_dir")
+                                echo -e "  ${YELLOW}→${NC} $domain_name"
+                                # Check for certificate files
+                                if [ -f "$domain_dir/${domain_name}.crt" ]; then
+                                    echo -e "    ${DIM}✓ Certificate found${NC}"
+                                fi
+                            fi
+                        done
+                    fi
+                done
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read
+                ;;
+                
+            3) # Show certificate details
+                echo -e "\n${CYAN}Enter domain name to inspect:${NC}"
+                read -p "Domain: " domain_inspect
+                
+                if [ -z "$domain_inspect" ]; then
+                    echo -e "${RED}No domain entered${NC}"
+                    sleep 2
+                    continue
+                fi
+                
+                found=false
+                for acme_dir in "$CERT_DIR"/*/; do
+                    domain_path="$acme_dir$domain_inspect"
+                    if [ -d "$domain_path" ]; then
+                        found=true
+                        echo -e "\n${GREEN}Certificate files for $domain_inspect:${NC}\n"
+                        sudo ls -lah "$domain_path"
+                        
+                        # Show certificate info if exists
+                        cert_file="$domain_path/${domain_inspect}.crt"
+                        if [ -f "$cert_file" ]; then
+                            echo -e "\n${CYAN}Certificate details:${NC}"
+                            sudo openssl x509 -in "$cert_file" -noout -text | grep -A 2 "Subject:\|Validity\|Not Before\|Not After" | head -10
+                        fi
+                        
+                        echo -e "\n${CYAN}Full path:${NC} $domain_path"
+                        break
+                    fi
+                done
+                
+                if [ "$found" = false ]; then
+                    echo -e "${YELLOW}No certificates found for domain: $domain_inspect${NC}"
+                fi
+                
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read
+                ;;
+                
+            4) # Delete abandoned domain certificates
+                echo -e "\n${CYAN}Available domains with certificates:${NC}\n"
+                domains=()
+                for acme_dir in "$CERT_DIR"/*/; do
+                    if [ -d "$acme_dir" ]; then
+                        for domain_dir in "$acme_dir"*/; do
+                            if [ -d "$domain_dir" ]; then
+                                domain_name=$(basename "$domain_dir")
+                                domains+=("$domain_name")
+                                echo -e "  ${YELLOW}→${NC} $domain_name"
+                            fi
+                        done
+                    fi
+                done
+                
+                echo -e "\n${RED}⚠️  WARNING: This will permanently delete certificate files!${NC}"
+                echo -e "${CYAN}Enter domain name to delete (or 'cancel' to abort):${NC}"
+                read -p "Domain to delete: " domain_delete
+                
+                if [ "$domain_delete" = "cancel" ] || [ -z "$domain_delete" ]; then
+                    echo -e "${YELLOW}Deletion cancelled${NC}"
+                    sleep 2
+                    continue
+                fi
+                
+                found=false
+                for acme_dir in "$CERT_DIR"/*/; do
+                    domain_path="$acme_dir$domain_delete"
+                    if [ -d "$domain_path" ]; then
+                        found=true
+                        echo -e "\n${YELLOW}Found certificate directory:${NC}"
+                        echo -e "$domain_path"
+                        echo -e "\n${CYAN}Contents to be deleted:${NC}"
+                        sudo ls -la "$domain_path"
+                        
+                        echo -e "\n${RED}Are you ABSOLUTELY SURE you want to delete all certificates for $domain_delete?${NC}"
+                        read -p "Type 'DELETE' to confirm: " confirm_delete
+                        
+                        if [ "$confirm_delete" = "DELETE" ]; then
+                            echo -e "${CYAN}Deleting certificate directory...${NC}"
+                            if sudo rm -rf "$domain_path"; then
+                                echo -e "${GREEN}✓ Successfully deleted certificates for $domain_delete${NC}"
+                            else
+                                echo -e "${RED}✗ Failed to delete certificate directory${NC}"
+                            fi
+                        else
+                            echo -e "${YELLOW}Deletion cancelled${NC}"
+                        fi
+                        break
+                    fi
+                done
+                
+                if [ "$found" = false ]; then
+                    echo -e "${YELLOW}No certificates found for domain: $domain_delete${NC}"
+                fi
+                
+                sleep 3
+                ;;
+                
+            5) # Show disk usage
+                echo -e "\n${CYAN}Certificate Storage Usage:${NC}\n"
+                sudo du -sh "$CERT_DIR" 2>/dev/null
+                echo -e "\n${CYAN}Per-domain usage:${NC}\n"
+                for acme_dir in "$CERT_DIR"/*/; do
+                    if [ -d "$acme_dir" ]; then
+                        echo -e "${GREEN}$(basename "$acme_dir"):${NC}"
+                        for domain_dir in "$acme_dir"*/; do
+                            if [ -d "$domain_dir" ]; then
+                                size=$(sudo du -sh "$domain_dir" 2>/dev/null | cut -f1)
+                                echo -e "  ${YELLOW}$(basename "$domain_dir"):${NC} $size"
+                            fi
+                        done
+                    fi
+                done
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read
+                ;;
+                
+            0) # Back to main menu
+                return
+                ;;
+                
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # Function to update Caddy with Cloudflare plugin
@@ -116,7 +329,6 @@ update_caddy_cloudflare() {
             else
                 echo -e "${RED}✗ Failed to start Caddy${NC}"
                 echo -e "${YELLOW}Check logs with: sudo journalctl -u caddy -n 50${NC}"
-                
                 # Still re-hold if it was held before
                 if [ "$WAS_HELD" = true ]; then
                     sudo apt-mark hold caddy
@@ -125,7 +337,6 @@ update_caddy_cloudflare() {
         else
             echo -e "${RED}✗ Downloaded binary doesn't have Cloudflare plugin${NC}"
             rm -f caddy
-            
             # Re-hold if it was held before
             if [ "$WAS_HELD" = true ]; then
                 sudo apt-mark hold caddy
@@ -133,7 +344,6 @@ update_caddy_cloudflare() {
         fi
     else
         echo -e "${RED}✗ Failed to download Caddy${NC}"
-        
         # Re-hold if it was held before
         if [ "$WAS_HELD" = true ]; then
             sudo apt-mark hold caddy
@@ -154,6 +364,7 @@ caddy_menu() {
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}${BOLD}           Checking Caddy Protection Status               ${NC}${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    
     ensure_caddy_held
     
     while true; do
@@ -175,21 +386,24 @@ caddy_menu() {
         else
             echo -e "${YELLOW}⚠️  Update Protection: Disabled${NC}"
         fi
+        
         echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
         
         echo -e "${GREEN}${BOLD}Configuration:${NC}"
         echo -e "${YELLOW}  1)${NC} 📝 Edit Caddyfile"
-        echo -e "${YELLOW}  2)${NC} ✅ Validate Caddyfile"
-        echo -e "${YELLOW}  3)${NC} 📋 Show current config"
+        echo -e "${YELLOW}  2)${NC} 📋 Show current config"
         
         echo -e "\n${GREEN}${BOLD}Service Control:${NC}"
-        echo -e "${YELLOW}  4)${NC} 🔁 Restart Caddy"
-        echo -e "${YELLOW}  5)${NC} ⏹️  Stop Caddy"
-        echo -e "${YELLOW}  6)${NC} ▶️  Start Caddy"
+        echo -e "${YELLOW}  3)${NC} 🔁 Restart Caddy"
+        echo -e "${YELLOW}  4)${NC} ⏹️  Stop Caddy"
+        echo -e "${YELLOW}  5)${NC} ▶️  Start Caddy"
         
         echo -e "\n${GREEN}${BOLD}Monitoring:${NC}"
-        echo -e "${YELLOW}  7)${NC} 📊 Show Caddy status"
-        echo -e "${YELLOW}  8)${NC} 📜 View Caddy logs"
+        echo -e "${YELLOW}  6)${NC} 📊 Show Caddy status"
+        echo -e "${YELLOW}  7)${NC} 📜 View Caddy logs"
+        
+        echo -e "\n${GREEN}${BOLD}Certificate Management:${NC}"
+        echo -e "${YELLOW}  8)${NC} 🔐 Manage SSL certificates"
         
         echo -e "\n${GREEN}${BOLD}Maintenance:${NC}"
         echo -e "${YELLOW}  9)${NC} 🔄 Update Caddy (with Cloudflare plugin)"
@@ -211,35 +425,25 @@ caddy_menu() {
                 fi
                 ;;
                 
-            2) # Validate
-                echo -e "\n${CYAN}Validating Caddyfile...${NC}\n"
-                if sudo caddy validate --config /etc/caddy/Caddyfile 2>&1; then
-                    echo -e "\n${GREEN}✓ Configuration is valid!${NC}"
-                else
-                    echo -e "\n${RED}✗ Configuration has errors!${NC}"
-                fi
-                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
-                read
-                ;;
-                
-            3) # Show config
+            2) # Show config
                 echo -e "\n${CYAN}Current Caddyfile:${NC}\n"
                 sudo cat /etc/caddy/Caddyfile | grep -v "^#" | grep -v "^$" | head -50
                 echo -e "\n${YELLOW}Press Enter to continue...${NC}"
                 read
                 ;;
                 
-            4) # Restart
+            3) # Restart
                 echo -e "\n${CYAN}Restarting Caddy...${NC}"
                 if sudo systemctl restart caddy; then
                     echo -e "${GREEN}✓ Caddy restarted successfully!${NC}"
                 else
                     echo -e "${RED}✗ Failed to restart Caddy${NC}"
+                    echo -e "${YELLOW}Check configuration with: sudo caddy validate --config /etc/caddy/Caddyfile${NC}"
                 fi
                 sleep 2
                 ;;
                 
-            5) # Stop
+            4) # Stop
                 echo -e "\n${YELLOW}⚠️  Stop Caddy?${NC}"
                 read -p "Continue? (y/N): " -n 1 -r
                 echo
@@ -250,7 +454,7 @@ caddy_menu() {
                 sleep 2
                 ;;
                 
-            6) # Start
+            5) # Start
                 echo -e "\n${CYAN}Starting Caddy...${NC}"
                 if sudo systemctl start caddy; then
                     echo -e "${GREEN}✓ Caddy started successfully!${NC}"
@@ -260,14 +464,14 @@ caddy_menu() {
                 sleep 2
                 ;;
                 
-            7) # Status
+            6) # Status
                 echo -e "\n${CYAN}Caddy Service Status:${NC}\n"
                 sudo systemctl status caddy --no-pager
                 echo -e "\n${YELLOW}Press Enter to continue...${NC}"
                 read
                 ;;
                 
-            8) # Logs
+            7) # Logs
                 echo -e "\n${CYAN}Caddy Logs (last 50 lines):${NC}\n"
                 sudo journalctl -u caddy --no-pager -n 50
                 echo -e "\n${YELLOW}Press q to quit, or follow with -f${NC}"
@@ -276,11 +480,16 @@ caddy_menu() {
                 [[ $REPLY =~ ^[Yy]$ ]] && sudo journalctl -u caddy -f
                 ;;
                 
+            8) # Certificate Management
+                manage_certificates
+                ;;
+                
             9) # Update Caddy with Cloudflare plugin
                 update_caddy_cloudflare
                 ;;
                 
             0) exit 0 ;;
+            
             *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
         esac
     done
