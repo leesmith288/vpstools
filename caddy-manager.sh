@@ -63,9 +63,17 @@ manage_certificates() {
     
     CERT_DIR="/var/lib/caddy/.local/share/caddy/certificates"
     
-    if [ ! -d "$CERT_DIR" ]; then
-        echo -e "${YELLOW}Certificate directory not found at: $CERT_DIR${NC}"
-        echo -e "${DIM}This might mean no certificates have been generated yet${NC}"
+    # Check with sudo permission
+    if ! sudo test -d "$CERT_DIR"; then
+        echo -e "${YELLOW}Certificate directory not accessible at: $CERT_DIR${NC}"
+        echo -e "${DIM}Checking with elevated permissions...${NC}"
+        
+        # Try to create/access the parent directories if they exist
+        if sudo test -d "/var/lib/caddy/.local/share/caddy"; then
+            echo -e "${GREEN}Parent directory exists, checking for certificates...${NC}"
+            sudo ls -la "/var/lib/caddy/.local/share/caddy/" 2>/dev/null
+        fi
+        
         echo -e "\n${YELLOW}Press Enter to return...${NC}"
         read
         return
@@ -97,15 +105,16 @@ manage_certificates() {
                 
             2) # List all domains
                 echo -e "\n${CYAN}Domains with certificates:${NC}\n"
-                for acme_dir in "$CERT_DIR"/*/; do
-                    if [ -d "$acme_dir" ]; then
+                # Using sudo to read directories
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
                         echo -e "${GREEN}ACME Provider: $(basename "$acme_dir")${NC}"
-                        for domain_dir in "$acme_dir"*/; do
-                            if [ -d "$domain_dir" ]; then
+                        for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
+                            if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
                                 echo -e "  ${YELLOW}→${NC} $domain_name"
                                 # Check for certificate files
-                                if [ -f "$domain_dir/${domain_name}.crt" ]; then
+                                if sudo test -f "$domain_dir/${domain_name}.crt"; then
                                     echo -e "    ${DIM}✓ Certificate found${NC}"
                                 fi
                             fi
@@ -127,22 +136,27 @@ manage_certificates() {
                 fi
                 
                 found=false
-                for acme_dir in "$CERT_DIR"/*/; do
-                    domain_path="$acme_dir$domain_inspect"
-                    if [ -d "$domain_path" ]; then
-                        found=true
-                        echo -e "\n${GREEN}Certificate files for $domain_inspect:${NC}\n"
-                        sudo ls -lah "$domain_path"
-                        
-                        # Show certificate info if exists
-                        cert_file="$domain_path/${domain_inspect}.crt"
-                        if [ -f "$cert_file" ]; then
-                            echo -e "\n${CYAN}Certificate details:${NC}"
-                            sudo openssl x509 -in "$cert_file" -noout -text | grep -A 2 "Subject:\|Validity\|Not Before\|Not After" | head -10
+                # Search in all ACME directories
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
+                        domain_path="$acme_dir/$domain_inspect"
+                        if sudo test -d "$domain_path"; then
+                            found=true
+                            echo -e "\n${GREEN}Certificate files for $domain_inspect:${NC}\n"
+                            sudo ls -lah "$domain_path"
+                            
+                            # Show certificate info if exists
+                            cert_file="$domain_path/${domain_inspect}.crt"
+                            if sudo test -f "$cert_file"; then
+                                echo -e "\n${CYAN}Certificate details:${NC}"
+                                sudo openssl x509 -in "$cert_file" -noout -text | grep -E "Subject:|Validity|Not Before:|Not After:" | head -10
+                                echo -e "\n${CYAN}Certificate expiry:${NC}"
+                                sudo openssl x509 -in "$cert_file" -noout -enddate
+                            fi
+                            
+                            echo -e "\n${CYAN}Full path:${NC} $domain_path"
+                            break
                         fi
-                        
-                        echo -e "\n${CYAN}Full path:${NC} $domain_path"
-                        break
                     fi
                 done
                 
@@ -157,10 +171,12 @@ manage_certificates() {
             4) # Delete abandoned domain certificates
                 echo -e "\n${CYAN}Available domains with certificates:${NC}\n"
                 domains=()
-                for acme_dir in "$CERT_DIR"/*/; do
-                    if [ -d "$acme_dir" ]; then
-                        for domain_dir in "$acme_dir"*/; do
-                            if [ -d "$domain_dir" ]; then
+                
+                # List all domains with sudo
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
+                        for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
+                            if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
                                 domains+=("$domain_name")
                                 echo -e "  ${YELLOW}→${NC} $domain_name"
@@ -180,29 +196,34 @@ manage_certificates() {
                 fi
                 
                 found=false
-                for acme_dir in "$CERT_DIR"/*/; do
-                    domain_path="$acme_dir$domain_delete"
-                    if [ -d "$domain_path" ]; then
-                        found=true
-                        echo -e "\n${YELLOW}Found certificate directory:${NC}"
-                        echo -e "$domain_path"
-                        echo -e "\n${CYAN}Contents to be deleted:${NC}"
-                        sudo ls -la "$domain_path"
-                        
-                        echo -e "\n${RED}Are you ABSOLUTELY SURE you want to delete all certificates for $domain_delete?${NC}"
-                        read -p "Type 'DELETE' to confirm: " confirm_delete
-                        
-                        if [ "$confirm_delete" = "DELETE" ]; then
-                            echo -e "${CYAN}Deleting certificate directory...${NC}"
-                            if sudo rm -rf "$domain_path"; then
-                                echo -e "${GREEN}✓ Successfully deleted certificates for $domain_delete${NC}"
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
+                        domain_path="$acme_dir/$domain_delete"
+                        if sudo test -d "$domain_path"; then
+                            found=true
+                            echo -e "\n${YELLOW}Found certificate directory:${NC}"
+                            echo -e "$domain_path"
+                            echo -e "\n${CYAN}Contents to be deleted:${NC}"
+                            sudo ls -la "$domain_path"
+                            
+                            echo -e "\n${RED}Are you ABSOLUTELY SURE you want to delete all certificates for $domain_delete?${NC}"
+                            read -p "Type 'DELETE' to confirm: " confirm_delete
+                            
+                            if [ "$confirm_delete" = "DELETE" ]; then
+                                echo -e "${CYAN}Deleting certificate directory...${NC}"
+                                if sudo rm -rf "$domain_path"; then
+                                    echo -e "${GREEN}✓ Successfully deleted certificates for $domain_delete${NC}"
+                                    
+                                    # Also clean up any OCSP stapling files if they exist
+                                    sudo rm -f "$acme_dir"/*"$domain_delete"*.ocsp 2>/dev/null
+                                else
+                                    echo -e "${RED}✗ Failed to delete certificate directory${NC}"
+                                fi
                             else
-                                echo -e "${RED}✗ Failed to delete certificate directory${NC}"
+                                echo -e "${YELLOW}Deletion cancelled${NC}"
                             fi
-                        else
-                            echo -e "${YELLOW}Deletion cancelled${NC}"
+                            break
                         fi
-                        break
                     fi
                 done
                 
@@ -215,19 +236,29 @@ manage_certificates() {
                 
             5) # Show disk usage
                 echo -e "\n${CYAN}Certificate Storage Usage:${NC}\n"
+                echo -e "${BOLD}Total usage:${NC}"
                 sudo du -sh "$CERT_DIR" 2>/dev/null
-                echo -e "\n${CYAN}Per-domain usage:${NC}\n"
-                for acme_dir in "$CERT_DIR"/*/; do
-                    if [ -d "$acme_dir" ]; then
-                        echo -e "${GREEN}$(basename "$acme_dir"):${NC}"
-                        for domain_dir in "$acme_dir"*/; do
-                            if [ -d "$domain_dir" ]; then
+                
+                echo -e "\n${BOLD}Per ACME provider:${NC}"
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
+                        size=$(sudo du -sh "$acme_dir" 2>/dev/null | cut -f1)
+                        echo -e "${GREEN}$(basename "$acme_dir"):${NC} $size"
+                    fi
+                done
+                
+                echo -e "\n${BOLD}Per domain:${NC}"
+                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
+                    if [ "$acme_dir" != "$CERT_DIR" ]; then
+                        for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
+                            if [ "$domain_dir" != "$acme_dir" ]; then
                                 size=$(sudo du -sh "$domain_dir" 2>/dev/null | cut -f1)
                                 echo -e "  ${YELLOW}$(basename "$domain_dir"):${NC} $size"
                             fi
                         done
                     fi
                 done
+                
                 echo -e "\n${YELLOW}Press Enter to continue...${NC}"
                 read
                 ;;
