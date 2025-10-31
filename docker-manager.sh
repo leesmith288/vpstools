@@ -154,7 +154,7 @@ show_dashboard() {
     echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo ""
-    # Separator
+    # Separator (removed status section)
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
@@ -212,14 +212,17 @@ show_dashboard() {
             # Status indicator with better visual
             if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
                 local indicator="${GREEN}${BOLD}●${NC}"
+                local status_text="${GREEN}${BOLD}${running}/${total} running${NC}"
             elif [ "$running" -eq 0 ]; then
                 local indicator="${RED}${BOLD}●${NC}"
+                local status_text="${RED}${BOLD}0/${total} stopped${NC}"
             else
                 local indicator="${YELLOW}${BOLD}●${NC}"
+                local status_text="${YELLOW}${BOLD}${running}/${total} partial${NC}"
             fi
             # Larger, more spaced layout
-            printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}\n" \
-                "$index" "$indicator" "$project"
+            printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}  %b\n" \
+                "$index" "$indicator" "$project" "$status_text"
             echo ""
             # Try to find the path using our mapping first, then fuzzy search
             local proj_path="${project_paths[$project]}"
@@ -244,11 +247,13 @@ show_dashboard() {
             IFS=':' read -r name state <<< "$container_info"
             if [ "$state" = "running" ]; then
                 local indicator="${GREEN}${BOLD}●${NC}"
+                local status_word="${GREEN}${BOLD}running${NC}"
             else
                 local indicator="${RED}${BOLD}●${NC}"
+                local status_word="${RED}${BOLD}stopped${NC}"
             fi
-            printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}\n" \
-                "$index" "$indicator" "$name"
+            printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}  %b\n" \
+                "$index" "$indicator" "$name" "$status_word"
             echo ""
             MENU_MAP[$index]="CONTAINER|$name"
             ((index++))
@@ -543,32 +548,20 @@ show_project_actions() {
         esac
     done
 }
-# NEW: View container logs with menu
+# MODIFIED: View container logs with menu
 view_container_logs() {
     local container=$1
     while true; do
         clear
         echo ""
         echo ""
-        echo -e "${CYAN}${BOLD}    ╔════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ║    LOGS: ${WHITE}${container}${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${CYAN}${BOLD}    LOGS: ${WHITE}${container}${NC}"
         echo ""
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo -e "${WHITE}${BOLD}    SELECT LOG VIEW:${NC}"
         echo ""
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}          ${DIM}Show logs from the last hour${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Last 100 lines${NC}     ${DIM}Show last 100 log lines${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[3]${NC}  ${WHITE}Live logs${NC}          ${DIM}Follow logs in real-time${NC}"
-        echo ""
-        echo ""
-        echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back${NC}"
-        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Live logs    ${YELLOW}[0]${NC} Back"
         echo ""
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
         case $choice in
@@ -599,10 +592,13 @@ view_container_logs() {
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                # FIXED: Use proper signal handling for real-time logs
-                trap 'echo ""; echo -e "    ${YELLOW}Log stream stopped${NC}"; sleep 1' INT
-                docker logs -f --tail 50 "$container" 2>&1 | colorize_logs
-                trap - INT
+                # FIXED: Proper live logs without buffering
+                stdbuf -o0 -e0 docker logs -f --tail 50 "$container" 2>&1 | while IFS= read -r line; do
+                    echo "$line" | colorize_logs
+                done
+                echo ""
+                echo -e "    ${YELLOW}Log stream stopped${NC}"
+                sleep 1
                 ;;
             0|"")
                 return
@@ -612,7 +608,7 @@ view_container_logs() {
         esac
     done
 }
-# NEW: View project logs with menu
+# MODIFIED: View project logs with menu
 view_project_logs() {
     local project_path=$1
     cd "$project_path" || return
@@ -620,25 +616,13 @@ view_project_logs() {
         clear
         echo ""
         echo ""
-        echo -e "${CYAN}${BOLD}    ╔════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ║    PROJECT LOGS: ${WHITE}$(basename "$project_path")${NC}"
-        echo -e "${CYAN}${BOLD}    ║                                                                    ║${NC}"
-        echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "${CYAN}${BOLD}    PROJECT LOGS: ${WHITE}$(basename "$project_path")${NC}"
         echo ""
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo -e "${WHITE}${BOLD}    SELECT LOG VIEW:${NC}"
         echo ""
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}Last hour${NC}          ${DIM}Show logs from the last hour${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}Last 100 lines${NC}     ${DIM}Show last 100 log lines${NC}"
-        echo ""
-        echo -e "        ${YELLOW}${BOLD}[3]${NC}  ${WHITE}Live logs${NC}          ${DIM}Follow logs in real-time${NC}"
-        echo ""
-        echo ""
-        echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back${NC}"
-        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Live logs    ${YELLOW}[0]${NC} Back"
         echo ""
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
         case $choice in
@@ -669,10 +653,13 @@ view_project_logs() {
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                # FIXED: Use proper signal handling for real-time logs
-                trap 'echo ""; echo -e "    ${YELLOW}Log stream stopped${NC}"; sleep 1' INT
-                docker compose logs -f --tail 50 2>&1 | colorize_logs
-                trap - INT
+                # FIXED: Proper live logs without buffering
+                stdbuf -o0 -e0 docker compose logs -f --tail 50 2>&1 | while IFS= read -r line; do
+                    echo "$line" | colorize_logs
+                done
+                echo ""
+                echo -e "    ${YELLOW}Log stream stopped${NC}"
+                sleep 1
                 ;;
             0|"")
                 return
