@@ -91,7 +91,6 @@ manage_certificates() {
         echo -e "${YELLOW}  2)${NC} 📋 List all domains with certificates"
         echo -e "${YELLOW}  3)${NC} 🔍 Show certificate details for a domain"
         echo -e "${YELLOW}  4)${NC} 🗑️  Clean up abandoned certificates"
-        echo -e "${YELLOW}  5)${NC} 📊 Show certificate disk usage"
         echo -e "\n${RED}  0)${NC} ↩️  Back to main menu\n"
         
         read -p "$(echo -e ${BOLD}Select option: ${NC})" cert_choice
@@ -176,11 +175,8 @@ manage_certificates() {
                 echo -e "${DIM}Reading domains from Caddyfile...${NC}"
                 active_domains=()
                 if [ -f "$CADDYFILE" ]; then
-                    # Extract domains from Caddyfile - handles multiple formats:
-                    # domain.com {
-                    # domain.com, www.domain.com {
-                    # https://domain.com {
-                    # *.domain.com {
+                    # Read the Caddyfile and extract domains
+                    # This handles multiple formats including simple domain definitions
                     while IFS= read -r line; do
                         # Remove comments and trim whitespace
                         line=$(echo "$line" | sed 's/#.*//' | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -188,22 +184,37 @@ manage_certificates() {
                         # Skip empty lines
                         [ -z "$line" ] && continue
                         
-                        # Match domain patterns at the beginning of blocks
-                        if [[ "$line" =~ ^([a-zA-Z0-9\.\-\*]+\.([a-zA-Z0-9\-]+\.)*[a-zA-Z0-9\-]+)[[:space:]]*(\{|,) ]] || \
-                           [[ "$line" =~ ^https?://([a-zA-Z0-9\.\-\*]+\.([a-zA-Z0-9\-]+\.)*[a-zA-Z0-9\-]+)[[:space:]]*(\{|,) ]]; then
+                        # Check if line starts with a domain-like pattern followed by space or {
+                        # This catches patterns like:
+                        # domain.com {
+                        # subdomain.domain.com {
+                        # *.domain.com {
+                        if [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,})[[:space:]]*\{ ]]; then
                             domain="${BASH_REMATCH[1]}"
-                            # Remove wildcard for comparison (*.domain.com -> domain.com)
+                            # Remove wildcard if present
                             domain="${domain#\*.}"
                             active_domains+=("$domain")
+                        # Also check for domains with ports or protocols
+                        elif [[ "$line" =~ ^https?://([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}) ]]; then
+                            domain="${BASH_REMATCH[1]}"
+                            active_domains+=("$domain")
+                        # Check for domains with port numbers
+                        elif [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}):[0-9]+ ]]; then
+                            domain="${BASH_REMATCH[1]}"
+                            active_domains+=("$domain")
                         fi
-                    done < "$CADDYFILE"
+                    done < <(sudo cat "$CADDYFILE")
                     
                     # Remove duplicates
                     active_domains=($(printf "%s\n" "${active_domains[@]}" | sort -u))
                     
                     echo -e "${GREEN}Found ${#active_domains[@]} active domains in Caddyfile${NC}"
                     if [ ${#active_domains[@]} -gt 0 ]; then
-                        echo -e "${DIM}Active domains: ${active_domains[*]}${NC}\n"
+                        echo -e "${DIM}Active domains:${NC}"
+                        for dom in "${active_domains[@]}"; do
+                            echo -e "${DIM}  - $dom${NC}"
+                        done
+                        echo
                     fi
                 else
                     echo -e "${RED}Caddyfile not found at $CADDYFILE${NC}"
@@ -260,8 +271,10 @@ manage_certificates() {
                 else
                     echo -e "${YELLOW}⚠️  Found ${#abandoned_domains[@]} abandoned certificate(s):${NC}\n"
                     
+                    # Fix the numbering issue here
                     for i in "${!abandoned_domains[@]}"; do
-                        echo -e "  ${RED}${i+1})${NC} ${abandoned_domains[$i]}"
+                        num=$((i + 1))
+                        echo -e "  ${RED}${num})${NC} ${abandoned_domains[$i]}"
                         # Show certificate size
                         if [ -d "${abandoned_paths[$i]}" ]; then
                             size=$(sudo du -sh "${abandoned_paths[$i]}" 2>/dev/null | cut -f1)
@@ -363,35 +376,6 @@ manage_certificates() {
                             ;;
                     esac
                 fi
-                
-                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
-                read
-                ;;
-                
-            5) # Show disk usage
-                echo -e "\n${CYAN}Certificate Storage Usage:${NC}\n"
-                echo -e "${BOLD}Total usage:${NC}"
-                sudo du -sh "$CERT_DIR" 2>/dev/null
-                
-                echo -e "\n${BOLD}Per ACME provider:${NC}"
-                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
-                    if [ "$acme_dir" != "$CERT_DIR" ]; then
-                        size=$(sudo du -sh "$acme_dir" 2>/dev/null | cut -f1)
-                        echo -e "${GREEN}$(basename "$acme_dir"):${NC} $size"
-                    fi
-                done
-                
-                echo -e "\n${BOLD}Per domain:${NC}"
-                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
-                    if [ "$acme_dir" != "$CERT_DIR" ]; then
-                        for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
-                            if [ "$domain_dir" != "$acme_dir" ]; then
-                                size=$(sudo du -sh "$domain_dir" 2>/dev/null | cut -f1)
-                                echo -e "  ${YELLOW}$(basename "$domain_dir"):${NC} $size"
-                            fi
-                        done
-                    fi
-                done
                 
                 echo -e "\n${YELLOW}Press Enter to continue...${NC}"
                 read
