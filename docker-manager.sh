@@ -1,15 +1,18 @@
 #!/bin/bash
 # Docker Manager Script - Beautiful & Safe Version
 # Streamlined with single deep cleanup and immediate log viewing
+
 # Check if Docker is installed and running
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker is not installed"
     exit 1
 fi
+
 if ! docker info &> /dev/null; then
     echo "❌ Docker daemon is not running"
     exit 1
 fi
+
 # Colors - High Contrast
 RED='\033[1;91m'
 GREEN='\033[1;92m'
@@ -22,6 +25,7 @@ ORANGE='\033[38;5;208m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
+
 # Symbols
 CHECK="✓"
 CROSS="✗"
@@ -29,9 +33,11 @@ WARNING="⚠"
 DOCKER="🐳"
 ARROW="➜"
 DOT="●"
+
 # Cache file
 CACHE_FILE="/tmp/docker-manager-cache-$$"
 trap "rm -f $CACHE_FILE" EXIT
+
 # Refresh cache
 refresh_cache() {
     docker ps -a --format "{{.Names}}|{{.Label \"com.docker.compose.project\"}}|{{.State}}" 2>/dev/null | \
@@ -39,12 +45,13 @@ refresh_cache() {
         name=$1
         project=$2
         state=$3
-        if (project "" || project "<no value>") {
+        if (project == "" || project == "<no value>") {
             project="__STANDALONE__"
         }
         print project "|" name "|" state
     }' | sort > "$CACHE_FILE"
 }
+
 # Find compose projects
 find_compose_projects() {
     # First, try to find all compose files in home
@@ -52,6 +59,7 @@ find_compose_projects() {
     while read -r file; do
         dirname "$file"
     done | sort -u)
+    
     # Also check common Docker locations
     for dir in /opt /srv /var/lib; do
         if [ -d "$dir" ]; then
@@ -61,27 +69,33 @@ find_compose_projects() {
             done
         fi
     done 2>/dev/null
+    
     echo "$compose_dirs" | sort -u
 }
+
 # FIXED: Much better fuzzy matching for project paths
 find_project_path() {
     local project_name=$1
     local found_path=""
     local all_paths=$(find_compose_projects)
+    
     # Debug output
     echo -e "    ${DIM}Looking for project: $project_name${NC}" >&2
+    
     # Try exact match first
     found_path=$(echo "$all_paths" | grep -m1 "/${project_name}$")
     if [ -n "$found_path" ]; then
         echo "$found_path"
         return
     fi
+    
     # Try case-insensitive exact match
     found_path=$(echo "$all_paths" | grep -i -m1 "/${project_name}$")
     if [ -n "$found_path" ]; then
         echo "$found_path"
         return
     fi
+    
     # IMPORTANT FIX: Handle common abbreviations and variations
     # Convert "database" to "db" and vice versa
     local variations=()
@@ -94,6 +108,7 @@ find_project_path() {
     variations+=("$(echo "$project_name" | sed 's/_database$/_db/g')")
     variations+=("$(echo "$project_name" | sed 's/-db$/-database/g')")
     variations+=("$(echo "$project_name" | sed 's/_db$/_database/g')")
+    
     # Try each variation
     for variant in "${variations[@]}"; do
         # Try exact match with variant
@@ -102,6 +117,7 @@ find_project_path() {
             echo "$found_path"
             return
         fi
+        
         # Try partial match with variant (beginning of path component)
         found_path=$(echo "$all_paths" | grep -i -m1 "/${variant}")
         if [ -n "$found_path" ]; then
@@ -109,6 +125,7 @@ find_project_path() {
             return
         fi
     done
+    
     # Last resort: try to match any part of the project name
     # Split by common separators and try to match the main part
     local main_part=$(echo "$project_name" | sed -E 's/[-_](db|database|api|app|service|server|client)$//i')
@@ -119,31 +136,38 @@ find_project_path() {
             return
         fi
     fi
+    
     # If still not found, return empty
     echo ""
 }
+
 # Get project status
 get_project_status() {
     local project=$1
     local total=0
     local running=0
+    
     while IFS='|' read -r proj name state; do
         if [ "$proj" = "$project" ]; then
             ((total++))
             [ "$state" = "running" ] && ((running++))
         fi
     done < "$CACHE_FILE"
+    
     echo "$total|$running"
 }
+
 # Press Enter to continue helper
 press_enter() {
     echo ""
     echo ""
     read -p "$(echo -e "    ${DIM}Press Enter to continue...${NC}")"
 }
+
 # Beautiful dashboard with better spacing
 show_dashboard() {
     clear
+    
     # Header with more breathing room
     echo ""
     echo ""
@@ -154,18 +178,33 @@ show_dashboard() {
     echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo ""
-    # Separator (removed status section)
+    
+    # Quick stats
+    local total=$(wc -l < "$CACHE_FILE")
+    local running=$(grep -c "|running$" "$CACHE_FILE")
+    local stopped=$((total - running))
+    
+    echo -e "${WHITE}${BOLD}    SYSTEM STATUS${NC}"
+    echo ""
+    echo -e "    ${GREEN}${BOLD}●  ${running} Running${NC}     ${RED}${BOLD}●  ${stopped} Stopped${NC}     ${BLUE}${BOLD}●  ${total} Total${NC}"
+    echo ""
+    echo ""
+    
+    # Separator
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
+    
     # Get unique projects and build path mappings
     declare -A projects
     declare -A project_paths
+    
     # Build comprehensive project-to-path mapping
     while IFS= read -r path; do
         if [ -n "$path" ] && [ -d "$path" ]; then
             local dir_name=$(basename "$path")
             project_paths["$dir_name"]="$path"
+            
             # IMPORTANT: Also map common variations
             # Handle lobe-chat-db -> lobe-chat-database mapping
             case "$dir_name" in
@@ -188,6 +227,7 @@ show_dashboard() {
             esac
         fi
     done < <(find_compose_projects)
+    
     # Get containers grouped by project
     while IFS='|' read -r project name state; do
         if [ -n "$project" ]; then
@@ -198,17 +238,21 @@ show_dashboard() {
             fi
         fi
     done < "$CACHE_FILE"
+    
     # Display sections
     local index=1
     declare -gA MENU_MAP
+    
     # Compose Projects Section
     if [ ${#projects[@]} -gt 1 ] || [ -z "${projects[__STANDALONE__]}" ]; then
         echo -e "${YELLOW}${BOLD}    COMPOSE PROJECTS${NC}"
         echo ""
         echo ""
+        
         for project in $(printf '%s\n' "${!projects[@]}" | grep -v "^__STANDALONE__$" | sort); do
             local status_info=$(get_project_status "$project")
             IFS='|' read -r total running <<< "$status_info"
+            
             # Status indicator with better visual
             if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
                 local indicator="${GREEN}${BOLD}●${NC}"
@@ -220,10 +264,12 @@ show_dashboard() {
                 local indicator="${YELLOW}${BOLD}●${NC}"
                 local status_text="${YELLOW}${BOLD}${running}/${total} partial${NC}"
             fi
+            
             # Larger, more spaced layout
             printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}  %b\n" \
                 "$index" "$indicator" "$project" "$status_text"
             echo ""
+            
             # Try to find the path using our mapping first, then fuzzy search
             local proj_path="${project_paths[$project]}"
             if [ -z "$proj_path" ] || [ ! -d "$proj_path" ]; then
@@ -237,14 +283,17 @@ show_dashboard() {
         echo ""
         echo ""
     fi
+    
     # Standalone Containers Section
     if [ -n "${projects[__STANDALONE__]}" ]; then
         echo -e "${YELLOW}${BOLD}    STANDALONE CONTAINERS${NC}"
         echo ""
         echo ""
+        
         IFS=',' read -ra containers <<< "${projects[__STANDALONE__]}"
         for container_info in "${containers[@]}"; do
             IFS=':' read -r name state <<< "$container_info"
+            
             if [ "$state" = "running" ]; then
                 local indicator="${GREEN}${BOLD}●${NC}"
                 local status_word="${GREEN}${BOLD}running${NC}"
@@ -252,9 +301,11 @@ show_dashboard() {
                 local indicator="${RED}${BOLD}●${NC}"
                 local status_word="${RED}${BOLD}stopped${NC}"
             fi
+            
             printf "        ${WHITE}${BOLD}[%2d]${NC}  %b  ${WHITE}${BOLD}%-40s${NC}  %b\n" \
                 "$index" "$indicator" "$name" "$status_word"
             echo ""
+            
             MENU_MAP[$index]="CONTAINER|$name"
             ((index++))
         done
@@ -263,6 +314,7 @@ show_dashboard() {
         echo ""
         echo ""
     fi
+    
     # Actions menu with more space
     echo -e "${CYAN}${BOLD}    ACTIONS${NC}"
     echo ""
@@ -275,9 +327,11 @@ show_dashboard() {
     echo ""
     echo ""
 }
+
 # Container actions menu
 show_container_actions() {
     local container=$1
+    
     while true; do
         clear
         echo ""
@@ -289,29 +343,36 @@ show_container_actions() {
         echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         echo ""
+        
         # Check if container still exists
         if ! docker inspect "$container" &>/dev/null; then
             echo -e "    ${RED}${CROSS} Container no longer exists${NC}"
             press_enter
             return
         fi
+        
         # Get container state
         local state=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null)
+        
         if [ "$state" = "running" ]; then
             echo -e "    Status:  ${GREEN}${BOLD}●  RUNNING${NC}"
         else
             echo -e "    Status:  ${RED}${BOLD}●  STOPPED${NC}"
         fi
+        
         echo ""
         echo ""
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    AVAILABLE ACTIONS${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}View logs${NC}                 ${DIM}View container logs${NC}"
         echo ""
+        
         if [ "$state" = "running" ]; then
             echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}docker restart${NC}            ${DIM}Restart container${NC}"
             echo ""
@@ -321,13 +382,16 @@ show_container_actions() {
             echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}docker start${NC}              ${DIM}Start container${NC}"
             echo ""
         fi
+        
         echo -e "        ${YELLOW}${BOLD}[4]${NC}  ${RED}docker rm${NC}                 ${DIM}Remove container${NC}"
         echo ""
         echo ""
         echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back to main menu${NC}"
         echo ""
         echo ""
+        
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" action
+        
         case $action in
             1)
                 view_container_logs "$container"
@@ -393,18 +457,22 @@ show_container_actions() {
         esac
     done
 }
+
 # Project actions menu - FIXED
 show_project_actions() {
     local project=$1
     local project_path=$2
+    
     # Better path finding with cleaner output
     if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
         project_path=$(find_project_path "$project" 2>/dev/null)
+        
         if [ -z "$project_path" ] || [ ! -d "$project_path" ]; then
             echo ""
             echo -e "    ${RED}${CROSS} Project directory not found for: ${project}${NC}"
             echo ""
             echo -e "    ${DIM}Available compose directories:${NC}"
+            
             # List all found compose directories
             local all_dirs=$(find_compose_projects)
             if [ -n "$all_dirs" ]; then
@@ -412,10 +480,12 @@ show_project_actions() {
                     echo -e "        ${DIM}- $dir${NC}"
                 done
             fi
+            
             press_enter
             return
         fi
     fi
+    
     # Verify compose file exists
     local compose_file=""
     for file in "docker-compose.yml" "docker-compose.yaml" "compose.yml" "compose.yaml"; do
@@ -424,11 +494,13 @@ show_project_actions() {
             break
         fi
     done
+    
     if [ -z "$compose_file" ]; then
         echo -e "    ${RED}${CROSS} No compose file found in: ${project_path}${NC}"
         press_enter
         return
     fi
+    
     while true; do
         clear
         echo ""
@@ -440,11 +512,14 @@ show_project_actions() {
         echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         echo ""
+        
         local status_info=$(get_project_status "$project")
         IFS='|' read -r total running <<< "$status_info"
+        
         echo -e "    Path:    ${DIM}${project_path}${NC}"
         echo -e "    File:    ${DIM}${compose_file}${NC}"
         echo ""
+        
         if [ "$running" -eq "$total" ] && [ "$running" -gt 0 ]; then
             echo -e "    Status:  ${GREEN}${BOLD}●  ${running}/${total} RUNNING${NC}"
         elif [ "$running" -eq 0 ]; then
@@ -452,14 +527,17 @@ show_project_actions() {
         else
             echo -e "    Status:  ${YELLOW}${BOLD}●  ${running}/${total} PARTIAL${NC}"
         fi
+        
         echo ""
         echo ""
         echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    AVAILABLE ACTIONS${NC}"
         echo ""
         echo ""
+        
         echo -e "        ${YELLOW}${BOLD}[1]${NC}  ${WHITE}View logs${NC}                           ${DIM}View project logs${NC}"
         echo ""
         echo -e "        ${YELLOW}${BOLD}[2]${NC}  ${WHITE}docker compose pull + up -d${NC}         ${GREEN}${DIM}Update & recreate${NC}"
@@ -476,8 +554,11 @@ show_project_actions() {
         echo -e "        ${WHITE}${BOLD}[0]${NC}  ${DIM}Back to main menu${NC}"
         echo ""
         echo ""
+        
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" action
+        
         cd "$project_path" || continue
+        
         case $action in
             1)
                 view_project_logs "$project_path"
@@ -548,9 +629,11 @@ show_project_actions() {
         esac
     done
 }
-# MODIFIED: View container logs with menu
+
+# IMPROVED: View container logs - Shows last hour immediately
 view_container_logs() {
     local container=$1
+    
     while true; do
         clear
         echo ""
@@ -559,20 +642,32 @@ view_container_logs() {
         echo ""
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo -e "${WHITE}${BOLD}    SELECT LOG VIEW:${NC}"
+        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
+        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
-        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Live logs    ${YELLOW}[0]${NC} Back"
+        
+        # Show last hour logs immediately
+        docker logs --since 1h "$container" 2>&1 | colorize_logs
+        
         echo ""
-        read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
+        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
+        echo ""
+        
+        read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
+        
         case $choice in
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker logs --since 1h "$container" 2>&1 | colorize_logs
+                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs
                 press_enter
                 ;;
             2)
@@ -592,13 +687,10 @@ view_container_logs() {
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                # FIXED: Proper live logs without buffering
-                stdbuf -o0 -e0 docker logs -f --tail 50 "$container" 2>&1 | while IFS= read -r line; do
-                    echo "$line" | colorize_logs
-                done
+                docker logs -f --tail 50 "$container" 2>&1 | colorize_logs
                 echo ""
                 echo -e "    ${YELLOW}Log stream stopped${NC}"
-                sleep 1
+                press_enter
                 ;;
             0|"")
                 return
@@ -608,10 +700,12 @@ view_container_logs() {
         esac
     done
 }
-# MODIFIED: View project logs with menu
+
+# IMPROVED: View project logs - Shows last hour immediately
 view_project_logs() {
     local project_path=$1
     cd "$project_path" || return
+    
     while true; do
         clear
         echo ""
@@ -620,20 +714,32 @@ view_project_logs() {
         echo ""
         echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo -e "${WHITE}${BOLD}    SELECT LOG VIEW:${NC}"
+        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
+        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
         echo ""
-        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Live logs    ${YELLOW}[0]${NC} Back"
+        
+        # Show last hour logs immediately
+        docker compose logs --since 1h 2>&1 | colorize_logs
+        
         echo ""
-        read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
+        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+        echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
+        echo ""
+        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
+        echo ""
+        
+        read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
+        
         case $choice in
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from last hour:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker compose logs --since 1h 2>&1 | colorize_logs
+                docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs
                 press_enter
                 ;;
             2)
@@ -653,13 +759,10 @@ view_project_logs() {
                 echo ""
                 echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                # FIXED: Proper live logs without buffering
-                stdbuf -o0 -e0 docker compose logs -f --tail 50 2>&1 | while IFS= read -r line; do
-                    echo "$line" | colorize_logs
-                done
+                docker compose logs -f --tail 50 2>&1 | colorize_logs
                 echo ""
                 echo -e "    ${YELLOW}Log stream stopped${NC}"
-                sleep 1
+                press_enter
                 ;;
             0|"")
                 return
@@ -669,6 +772,7 @@ view_project_logs() {
         esac
     done
 }
+
 # Colorize logs
 colorize_logs() {
     sed -E "s/\b(ERROR|error|Error|FAIL|fail|Fail|FAILED|failed|Failed|FATAL|fatal|Fatal|PANIC|panic|Panic)\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g" | \
@@ -676,6 +780,7 @@ colorize_logs() {
     sed -E "s/\b(INFO|info|Info)\b/$(printf '\033[1;94m')&$(printf '\033[0m')/g" | \
     sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
 }
+
 # IMPROVED: Single deep cleanup with one confirmation
 clean_docker() {
     clear
@@ -688,14 +793,17 @@ clean_docker() {
     echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo ""
+    
     echo -e "${WHITE}${BOLD}    CURRENT DISK USAGE${NC}"
     echo ""
     docker system df | sed 's/^/    /'
     echo ""
     echo ""
+    
     echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
     echo ""
     echo ""
+    
     echo -e "${YELLOW}${BOLD}    This will remove:${NC}"
     echo ""
     echo -e "        ${DOT}  All stopped containers"
@@ -713,15 +821,19 @@ clean_docker() {
     echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers and their resources are protected${NC}"
     echo ""
     echo ""
+    
     read -p "$(echo -e "    ${ORANGE}${BOLD}Proceed with cleanup? (y/N): ${NC}")" confirm
+    
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         echo ""
         echo -e "    ${YELLOW}Step 1/3: Running system prune...${NC}"
         echo ""
         docker system prune -a -f 2>&1 | sed 's/^/    /'
+        
         echo ""
         echo -e "    ${YELLOW}Step 2/3: Checking for unused volumes...${NC}"
         echo ""
+        
         # Check and remove unused volumes without asking again
         local unused_volumes=$(docker volume ls -qf dangling=true 2>/dev/null | wc -l)
         if [ "$unused_volumes" -gt 0 ]; then
@@ -730,28 +842,37 @@ clean_docker() {
         else
             echo -e "    ${GREEN}No unused volumes found${NC}"
         fi
+        
         echo ""
         echo -e "    ${YELLOW}Step 3/3: Final cleanup...${NC}"
         echo ""
+        
         # Clean up builder cache
         docker builder prune -af 2>/dev/null | sed 's/^/    /'
+        
         echo ""
         echo -e "    ${GREEN}${BOLD}${CHECK}  Cleanup complete!${NC}"
         echo ""
         echo ""
+        
         echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
         echo ""
         docker system df | sed 's/^/    /'
+        
         press_enter
         refresh_cache
     fi
 }
+
 # Main function
 main() {
     refresh_cache
+    
     while true; do
         show_dashboard
+        
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select: ${NC}")" choice
+        
         case ${choice,,} in
             q)
                 echo ""
@@ -783,5 +904,6 @@ main() {
         esac
     done
 }
+
 # Run main
 main
