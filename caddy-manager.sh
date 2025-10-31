@@ -63,13 +63,28 @@ manage_certificates() {
     
     CERT_DIR="/var/lib/caddy/.local/share/caddy/certificates"
     CADDYFILE="/etc/caddy/Caddyfile"
+
+    # Minimal, robust hostname normalizer (lowercase, remove wildcard, keep only valid ASCII hostname chars)
+    normalize_host() {
+        local s="$1"
+        # Lowercase
+        s=$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')
+        # Remove ASCII whitespace (incl. CR/LF/TAB)
+        s=$(printf '%s' "$s" | tr -d '[:space:]')
+        # Drop leading "*." wildcard if present
+        if [[ "$s" == \*.* ]]; then s="${s#*.}"; fi
+        # Strip any trailing dot
+        s="${s%.}"
+        # Keep only ASCII hostname chars to kill any hidden non-ASCII bytes
+        s=$(printf '%s' "$s" | LC_ALL=C tr -cd '[:alnum:].-')
+        printf '%s' "$s"
+    }
     
     # Check with sudo permission
     if ! sudo test -d "$CERT_DIR"; then
         echo -e "${YELLOW}Certificate directory not accessible at: $CERT_DIR${NC}"
         echo -e "${DIM}Checking with elevated permissions...${NC}"
         
-        # Try to create/access the parent directories if they exist
         if sudo test -d "/var/lib/caddy/.local/share/caddy"; then
             echo -e "${GREEN}Parent directory exists, checking for certificates...${NC}"
             sudo ls -la "/var/lib/caddy/.local/share/caddy/" 2>/dev/null
@@ -105,15 +120,14 @@ manage_certificates() {
                 
             2) # List all domains
                 echo -e "\n${CYAN}Domains with certificates:${NC}\n"
-                # Using sudo to read directories
                 for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
                     if [ "$acme_dir" != "$CERT_DIR" ]; then
                         echo -e "${GREEN}ACME Provider: $(basename "$acme_dir")${NC}"
                         for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
                             if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
+                                domain_name=$(normalize_host "$domain_name")
                                 echo -e "  ${YELLOW}→${NC} $domain_name"
-                                # Check for certificate files
                                 if sudo test -f "$domain_dir/${domain_name}.crt"; then
                                     echo -e "    ${DIM}✓ Certificate found${NC}"
                                 fi
@@ -128,6 +142,7 @@ manage_certificates() {
             3) # Show certificate details
                 echo -e "\n${CYAN}Enter domain name to inspect:${NC}"
                 read -p "Domain: " domain_inspect
+                domain_inspect=$(normalize_host "$domain_inspect")
                 
                 if [ -z "$domain_inspect" ]; then
                     echo -e "${RED}No domain entered${NC}"
@@ -136,7 +151,6 @@ manage_certificates() {
                 fi
                 
                 found=false
-                # Search in all ACME directories
                 for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
                     if [ "$acme_dir" != "$CERT_DIR" ]; then
                         domain_path="$acme_dir/$domain_inspect"
@@ -145,7 +159,6 @@ manage_certificates() {
                             echo -e "\n${GREEN}Certificate files for $domain_inspect:${NC}\n"
                             sudo ls -lah "$domain_path"
                             
-                            # Show certificate info if exists
                             cert_file="$domain_path/${domain_inspect}.crt"
                             if sudo test -f "$cert_file"; then
                                 echo -e "\n${CYAN}Certificate details:${NC}"
@@ -171,35 +184,24 @@ manage_certificates() {
             4) # Clean up abandoned certificates
                 echo -e "\n${CYAN}Analyzing certificates and Caddyfile...${NC}\n"
                 
-                # Extract domains from Caddyfile (handles various formats)
                 echo -e "${DIM}Reading domains from Caddyfile...${NC}"
                 active_domains=()
                 if [ -f "$CADDYFILE" ]; then
-                    # Read the Caddyfile and extract domains
                     while IFS= read -r line; do
-                        # Remove comments and trim whitespace
                         line=$(echo "$line" | sed 's/#.*//' | sed 's/^[ \t]*//;s/[ \t]*$//')
-                        
-                        # Skip empty lines
                         [ -z "$line" ] && continue
                         
-                        # Check if line starts with a domain-like pattern followed by space or {
                         if [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,})[[:space:]]*\{ ]]; then
                             domain="${BASH_REMATCH[1]}"
-                            # Remove wildcard if present
-                            domain="${domain#\*.}"
-                            # Trim any whitespace
-                            domain=$(echo "$domain" | tr -d '[:space:]')
+                            domain=$(normalize_host "$domain")
                             active_domains+=("$domain")
-                        # Also check for domains with ports or protocols
                         elif [[ "$line" =~ ^https?://([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}) ]]; then
                             domain="${BASH_REMATCH[1]}"
-                            domain=$(echo "$domain" | tr -d '[:space:]')
+                            domain=$(normalize_host "$domain")
                             active_domains+=("$domain")
-                        # Check for domains with port numbers
                         elif [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}):[0-9]+ ]]; then
                             domain="${BASH_REMATCH[1]}"
-                            domain=$(echo "$domain" | tr -d '[:space:]')
+                            domain=$(normalize_host "$domain")
                             active_domains+=("$domain")
                         fi
                     done < <(sudo cat "$CADDYFILE")
@@ -211,7 +213,7 @@ manage_certificates() {
                     if [ ${#active_domains[@]} -gt 0 ]; then
                         echo -e "${DIM}Active domains:${NC}"
                         for dom in "${active_domains[@]}"; do
-                            echo -e "${DIM}  - '$dom' (length: ${#dom})${NC}"
+                            echo -e "${DIM}  - '$dom'${NC}"
                         done
                         echo
                     fi
@@ -219,7 +221,6 @@ manage_certificates() {
                     echo -e "${RED}Caddyfile not found at $CADDYFILE${NC}"
                 fi
                 
-                # Find all certificate domains
                 echo -e "${DIM}Scanning certificate directories...${NC}"
                 cert_domains=()
                 cert_paths=()
@@ -229,8 +230,7 @@ manage_certificates() {
                         for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
                             if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
-                                # Trim any whitespace
-                                domain_name=$(echo "$domain_name" | tr -d '[:space:]')
+                                domain_name=$(normalize_host "$domain_name")
                                 cert_domains+=("$domain_name")
                                 cert_paths+=("$domain_dir")
                             fi
@@ -241,11 +241,10 @@ manage_certificates() {
                 echo -e "${GREEN}Found ${#cert_domains[@]} domains with certificates${NC}"
                 echo -e "${DIM}Certificate domains:${NC}"
                 for cert_dom in "${cert_domains[@]}"; do
-                    echo -e "${DIM}  - '$cert_dom' (length: ${#cert_dom})${NC}"
+                    echo -e "${DIM}  - '$cert_dom'${NC}"
                 done
                 echo
                 
-                # Find abandoned domains - IMPROVED COMPARISON
                 abandoned_domains=()
                 abandoned_paths=()
                 
@@ -254,23 +253,18 @@ manage_certificates() {
                     path="${cert_paths[$i]}"
                     is_active=false
                     
-                    # Debug output
                     echo -e "${DIM}Checking if '$domain' is active...${NC}"
                     
-                    # Check if this certificate domain matches any active domain
-                    for j in "${!active_domains[@]}"; do
-                        active_domain="${active_domains[$j]}"
-                        
-                        # Use bash string comparison with quotes to handle special characters
-                        if [[ "${domain}" == "${active_domain}" ]]; then
+                    for active_domain in "${active_domains[@]}"; do
+                        if [[ "$domain" == "$active_domain" ]]; then
                             echo -e "${DIM}  ✓ Found exact match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
-                        elif [[ "${domain}" == "www.${active_domain}" ]]; then
+                        elif [[ "$domain" == "www.${active_domain}" ]]; then
                             echo -e "${DIM}  ✓ Found www variant match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
-                        elif [[ "${active_domain}" == "www.${domain}" ]]; then
+                        elif [[ "$active_domain" == "www.${domain}" ]]; then
                             echo -e "${DIM}  ✓ Found non-www match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
@@ -281,10 +275,6 @@ manage_certificates() {
                         echo -e "${DIM}  → Domain '$domain' is ACTIVE${NC}"
                     else
                         echo -e "${DIM}  → Domain '$domain' is ABANDONED${NC}"
-                        # Double check by doing a grep search
-                        if sudo grep -q "^${domain}[[:space:]]*{" "$CADDYFILE" 2>/dev/null; then
-                            echo -e "${YELLOW}  ⚠️  WARNING: Domain might actually be in Caddyfile!${NC}"
-                        fi
                         abandoned_domains+=("$domain")
                         abandoned_paths+=("$path")
                     fi
@@ -292,7 +282,6 @@ manage_certificates() {
                 
                 echo
                 
-                # Display results
                 if [ ${#abandoned_domains[@]} -eq 0 ]; then
                     echo -e "${GREEN}✓ No abandoned certificates found!${NC}"
                     echo -e "${DIM}All certificate domains are active in the Caddyfile${NC}"
@@ -302,11 +291,6 @@ manage_certificates() {
                     for i in "${!abandoned_domains[@]}"; do
                         num=$((i + 1))
                         echo -e "  ${RED}${num})${NC} ${abandoned_domains[$i]}"
-                        # Show certificate size
-                        if [ -d "${abandoned_paths[$i]}" ]; then
-                            size=$(sudo du -sh "${abandoned_paths[$i]}" 2>/dev/null | cut -f1)
-                            echo -e "     ${DIM}Size: $size${NC}"
-                        fi
                     done
                     
                     echo -e "\n${CYAN}What would you like to do?${NC}"
@@ -360,10 +344,8 @@ manage_certificates() {
                             if [ -z "$selected_nums" ]; then
                                 echo -e "${YELLOW}No selection made${NC}"
                             else
-                                # Parse selected numbers
                                 to_delete=()
                                 for num in $selected_nums; do
-                                    # Validate number
                                     if [[ "$num" =~ ^[0-9]+$ ]] && [ $num -ge 1 ] && [ $num -le ${#abandoned_domains[@]} ]; then
                                         index=$((num - 1))
                                         to_delete+=($index)
