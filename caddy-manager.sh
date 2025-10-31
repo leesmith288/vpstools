@@ -62,6 +62,7 @@ manage_certificates() {
     fi
     
     CERT_DIR="/var/lib/caddy/.local/share/caddy/certificates"
+    CADDYFILE="/etc/caddy/Caddyfile"
     
     # Check with sudo permission
     if ! sudo test -d "$CERT_DIR"; then
@@ -89,7 +90,7 @@ manage_certificates() {
         echo -e "${YELLOW}  1)${NC} 📂 View certificate tree structure"
         echo -e "${YELLOW}  2)${NC} 📋 List all domains with certificates"
         echo -e "${YELLOW}  3)${NC} 🔍 Show certificate details for a domain"
-        echo -e "${YELLOW}  4)${NC} 🗑️  Delete certificates for abandoned domain"
+        echo -e "${YELLOW}  4)${NC} 🗑️  Clean up abandoned certificates"
         echo -e "${YELLOW}  5)${NC} 📊 Show certificate disk usage"
         echo -e "\n${RED}  0)${NC} ↩️  Back to main menu\n"
         
@@ -168,70 +169,203 @@ manage_certificates() {
                 read
                 ;;
                 
-            4) # Delete abandoned domain certificates
-                echo -e "\n${CYAN}Available domains with certificates:${NC}\n"
-                domains=()
+            4) # Clean up abandoned certificates
+                echo -e "\n${CYAN}Analyzing certificates and Caddyfile...${NC}\n"
                 
-                # List all domains with sudo
+                # Extract domains from Caddyfile (handles various formats)
+                echo -e "${DIM}Reading domains from Caddyfile...${NC}"
+                active_domains=()
+                if [ -f "$CADDYFILE" ]; then
+                    # Extract domains from Caddyfile - handles multiple formats:
+                    # domain.com {
+                    # domain.com, www.domain.com {
+                    # https://domain.com {
+                    # *.domain.com {
+                    while IFS= read -r line; do
+                        # Remove comments and trim whitespace
+                        line=$(echo "$line" | sed 's/#.*//' | sed 's/^[ \t]*//;s/[ \t]*$//')
+                        
+                        # Skip empty lines
+                        [ -z "$line" ] && continue
+                        
+                        # Match domain patterns at the beginning of blocks
+                        if [[ "$line" =~ ^([a-zA-Z0-9\.\-\*]+\.([a-zA-Z0-9\-]+\.)*[a-zA-Z0-9\-]+)[[:space:]]*(\{|,) ]] || \
+                           [[ "$line" =~ ^https?://([a-zA-Z0-9\.\-\*]+\.([a-zA-Z0-9\-]+\.)*[a-zA-Z0-9\-]+)[[:space:]]*(\{|,) ]]; then
+                            domain="${BASH_REMATCH[1]}"
+                            # Remove wildcard for comparison (*.domain.com -> domain.com)
+                            domain="${domain#\*.}"
+                            active_domains+=("$domain")
+                        fi
+                    done < "$CADDYFILE"
+                    
+                    # Remove duplicates
+                    active_domains=($(printf "%s\n" "${active_domains[@]}" | sort -u))
+                    
+                    echo -e "${GREEN}Found ${#active_domains[@]} active domains in Caddyfile${NC}"
+                    if [ ${#active_domains[@]} -gt 0 ]; then
+                        echo -e "${DIM}Active domains: ${active_domains[*]}${NC}\n"
+                    fi
+                else
+                    echo -e "${RED}Caddyfile not found at $CADDYFILE${NC}"
+                fi
+                
+                # Find all certificate domains
+                echo -e "${DIM}Scanning certificate directories...${NC}"
+                cert_domains=()
+                cert_paths=()
+                
                 for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
                     if [ "$acme_dir" != "$CERT_DIR" ]; then
                         for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
                             if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
-                                domains+=("$domain_name")
-                                echo -e "  ${YELLOW}→${NC} $domain_name"
+                                cert_domains+=("$domain_name")
+                                cert_paths+=("$domain_dir")
                             fi
                         done
                     fi
                 done
                 
-                echo -e "\n${RED}⚠️  WARNING: This will permanently delete certificate files!${NC}"
-                echo -e "${CYAN}Enter domain name to delete (or 'cancel' to abort):${NC}"
-                read -p "Domain to delete: " domain_delete
+                echo -e "${GREEN}Found ${#cert_domains[@]} domains with certificates${NC}\n"
                 
-                if [ "$domain_delete" = "cancel" ] || [ -z "$domain_delete" ]; then
-                    echo -e "${YELLOW}Deletion cancelled${NC}"
-                    sleep 2
-                    continue
-                fi
+                # Find abandoned domains
+                abandoned_domains=()
+                abandoned_paths=()
                 
-                found=false
-                for acme_dir in $(sudo find "$CERT_DIR" -maxdepth 1 -type d); do
-                    if [ "$acme_dir" != "$CERT_DIR" ]; then
-                        domain_path="$acme_dir/$domain_delete"
-                        if sudo test -d "$domain_path"; then
-                            found=true
-                            echo -e "\n${YELLOW}Found certificate directory:${NC}"
-                            echo -e "$domain_path"
-                            echo -e "\n${CYAN}Contents to be deleted:${NC}"
-                            sudo ls -la "$domain_path"
+                for i in "${!cert_domains[@]}"; do
+                    domain="${cert_domains[$i]}"
+                    path="${cert_paths[$i]}"
+                    is_active=false
+                    
+                    # Check if this certificate domain matches any active domain
+                    for active_domain in "${active_domains[@]}"; do
+                        if [ "$domain" = "$active_domain" ] || \
+                           [ "$domain" = "www.$active_domain" ] || \
+                           [ "$active_domain" = "www.$domain" ]; then
+                            is_active=true
+                            break
+                        fi
+                    done
+                    
+                    if [ "$is_active" = false ]; then
+                        abandoned_domains+=("$domain")
+                        abandoned_paths+=("$path")
+                    fi
+                done
+                
+                # Display results
+                if [ ${#abandoned_domains[@]} -eq 0 ]; then
+                    echo -e "${GREEN}✓ No abandoned certificates found!${NC}"
+                    echo -e "${DIM}All certificate domains are active in the Caddyfile${NC}"
+                else
+                    echo -e "${YELLOW}⚠️  Found ${#abandoned_domains[@]} abandoned certificate(s):${NC}\n"
+                    
+                    for i in "${!abandoned_domains[@]}"; do
+                        echo -e "  ${RED}${i+1})${NC} ${abandoned_domains[$i]}"
+                        # Show certificate size
+                        if [ -d "${abandoned_paths[$i]}" ]; then
+                            size=$(sudo du -sh "${abandoned_paths[$i]}" 2>/dev/null | cut -f1)
+                            echo -e "     ${DIM}Size: $size | Path: ${abandoned_paths[$i]}${NC}"
+                        fi
+                    done
+                    
+                    echo -e "\n${CYAN}What would you like to do?${NC}"
+                    echo -e "${YELLOW}  1)${NC} Delete all abandoned certificates"
+                    echo -e "${YELLOW}  2)${NC} Delete specific certificate(s)"
+                    echo -e "${YELLOW}  0)${NC} Cancel\n"
+                    
+                    read -p "$(echo -e ${BOLD}Select option: ${NC})" cleanup_choice
+                    
+                    case $cleanup_choice in
+                        1) # Delete all
+                            echo -e "\n${RED}⚠️  This will delete ALL ${#abandoned_domains[@]} abandoned certificate(s)${NC}"
+                            echo -e "${CYAN}Domains to be deleted:${NC}"
+                            for domain in "${abandoned_domains[@]}"; do
+                                echo -e "  ${YELLOW}→${NC} $domain"
+                            done
                             
-                            echo -e "\n${RED}Are you ABSOLUTELY SURE you want to delete all certificates for $domain_delete?${NC}"
-                            read -p "Type 'DELETE' to confirm: " confirm_delete
+                            echo -e "\n${BOLD}Are you sure? (y/N):${NC} "
+                            read -n 1 -r confirm_all
+                            echo
                             
-                            if [ "$confirm_delete" = "DELETE" ]; then
-                                echo -e "${CYAN}Deleting certificate directory...${NC}"
-                                if sudo rm -rf "$domain_path"; then
-                                    echo -e "${GREEN}✓ Successfully deleted certificates for $domain_delete${NC}"
-                                    
-                                    # Also clean up any OCSP stapling files if they exist
-                                    sudo rm -f "$acme_dir"/*"$domain_delete"*.ocsp 2>/dev/null
-                                else
-                                    echo -e "${RED}✗ Failed to delete certificate directory${NC}"
+                            if [[ $confirm_all =~ ^[Yy]$ ]]; then
+                                deleted_count=0
+                                failed_count=0
+                                
+                                for i in "${!abandoned_paths[@]}"; do
+                                    echo -e "${CYAN}Deleting ${abandoned_domains[$i]}...${NC}"
+                                    if sudo rm -rf "${abandoned_paths[$i]}"; then
+                                        echo -e "${GREEN}  ✓ Deleted${NC}"
+                                        ((deleted_count++))
+                                    else
+                                        echo -e "${RED}  ✗ Failed${NC}"
+                                        ((failed_count++))
+                                    fi
+                                done
+                                
+                                echo -e "\n${GREEN}Deleted $deleted_count certificate(s)${NC}"
+                                if [ $failed_count -gt 0 ]; then
+                                    echo -e "${RED}Failed to delete $failed_count certificate(s)${NC}"
                                 fi
                             else
                                 echo -e "${YELLOW}Deletion cancelled${NC}"
                             fi
-                            break
-                        fi
-                    fi
-                done
-                
-                if [ "$found" = false ]; then
-                    echo -e "${YELLOW}No certificates found for domain: $domain_delete${NC}"
+                            ;;
+                            
+                        2) # Delete specific
+                            echo -e "\n${CYAN}Enter the numbers of certificates to delete (space-separated):${NC}"
+                            echo -e "${DIM}Example: 1 3 4${NC}"
+                            read -p "Numbers: " selected_nums
+                            
+                            if [ -z "$selected_nums" ]; then
+                                echo -e "${YELLOW}No selection made${NC}"
+                            else
+                                # Parse selected numbers
+                                to_delete=()
+                                for num in $selected_nums; do
+                                    # Validate number
+                                    if [[ "$num" =~ ^[0-9]+$ ]] && [ $num -ge 1 ] && [ $num -le ${#abandoned_domains[@]} ]; then
+                                        index=$((num - 1))
+                                        to_delete+=($index)
+                                    else
+                                        echo -e "${RED}Invalid number: $num${NC}"
+                                    fi
+                                done
+                                
+                                if [ ${#to_delete[@]} -gt 0 ]; then
+                                    echo -e "\n${YELLOW}Will delete:${NC}"
+                                    for idx in "${to_delete[@]}"; do
+                                        echo -e "  ${YELLOW}→${NC} ${abandoned_domains[$idx]}"
+                                    done
+                                    
+                                    echo -e "\n${BOLD}Confirm deletion? (y/N):${NC} "
+                                    read -n 1 -r confirm_selected
+                                    echo
+                                    
+                                    if [[ $confirm_selected =~ ^[Yy]$ ]]; then
+                                        for idx in "${to_delete[@]}"; do
+                                            echo -e "${CYAN}Deleting ${abandoned_domains[$idx]}...${NC}"
+                                            if sudo rm -rf "${abandoned_paths[$idx]}"; then
+                                                echo -e "${GREEN}  ✓ Deleted${NC}"
+                                            else
+                                                echo -e "${RED}  ✗ Failed${NC}"
+                                            fi
+                                        done
+                                    else
+                                        echo -e "${YELLOW}Deletion cancelled${NC}"
+                                    fi
+                                fi
+                            fi
+                            ;;
+                            
+                        0|*)
+                            echo -e "${YELLOW}Cleanup cancelled${NC}"
+                            ;;
+                    esac
                 fi
                 
-                sleep 3
+                echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+                read
                 ;;
                 
             5) # Show disk usage
