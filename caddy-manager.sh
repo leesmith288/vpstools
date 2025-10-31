@@ -188,14 +188,18 @@ manage_certificates() {
                             domain="${BASH_REMATCH[1]}"
                             # Remove wildcard if present
                             domain="${domain#\*.}"
+                            # Trim any whitespace
+                            domain=$(echo "$domain" | tr -d '[:space:]')
                             active_domains+=("$domain")
                         # Also check for domains with ports or protocols
                         elif [[ "$line" =~ ^https?://([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}) ]]; then
                             domain="${BASH_REMATCH[1]}"
+                            domain=$(echo "$domain" | tr -d '[:space:]')
                             active_domains+=("$domain")
                         # Check for domains with port numbers
                         elif [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,}):[0-9]+ ]]; then
                             domain="${BASH_REMATCH[1]}"
+                            domain=$(echo "$domain" | tr -d '[:space:]')
                             active_domains+=("$domain")
                         fi
                     done < <(sudo cat "$CADDYFILE")
@@ -207,7 +211,7 @@ manage_certificates() {
                     if [ ${#active_domains[@]} -gt 0 ]; then
                         echo -e "${DIM}Active domains:${NC}"
                         for dom in "${active_domains[@]}"; do
-                            echo -e "${DIM}  - $dom${NC}"
+                            echo -e "${DIM}  - '$dom' (length: ${#dom})${NC}"
                         done
                         echo
                     fi
@@ -225,6 +229,8 @@ manage_certificates() {
                         for domain_dir in $(sudo find "$acme_dir" -maxdepth 1 -type d); do
                             if [ "$domain_dir" != "$acme_dir" ]; then
                                 domain_name=$(basename "$domain_dir")
+                                # Trim any whitespace
+                                domain_name=$(echo "$domain_name" | tr -d '[:space:]')
                                 cert_domains+=("$domain_name")
                                 cert_paths+=("$domain_dir")
                             fi
@@ -235,11 +241,11 @@ manage_certificates() {
                 echo -e "${GREEN}Found ${#cert_domains[@]} domains with certificates${NC}"
                 echo -e "${DIM}Certificate domains:${NC}"
                 for cert_dom in "${cert_domains[@]}"; do
-                    echo -e "${DIM}  - $cert_dom${NC}"
+                    echo -e "${DIM}  - '$cert_dom' (length: ${#cert_dom})${NC}"
                 done
                 echo
                 
-                # Find abandoned domains - FIX THE LOGIC HERE
+                # Find abandoned domains - IMPROVED COMPARISON
                 abandoned_domains=()
                 abandoned_paths=()
                 
@@ -252,17 +258,19 @@ manage_certificates() {
                     echo -e "${DIM}Checking if '$domain' is active...${NC}"
                     
                     # Check if this certificate domain matches any active domain
-                    for active_domain in "${active_domains[@]}"; do
-                        # Debug comparison
-                        if [ "$domain" = "$active_domain" ]; then
+                    for j in "${!active_domains[@]}"; do
+                        active_domain="${active_domains[$j]}"
+                        
+                        # Use bash string comparison with quotes to handle special characters
+                        if [[ "${domain}" == "${active_domain}" ]]; then
                             echo -e "${DIM}  ✓ Found exact match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
-                        elif [ "$domain" = "www.$active_domain" ]; then
+                        elif [[ "${domain}" == "www.${active_domain}" ]]; then
                             echo -e "${DIM}  ✓ Found www variant match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
-                        elif [ "$active_domain" = "www.$domain" ]; then
+                        elif [[ "${active_domain}" == "www.${domain}" ]]; then
                             echo -e "${DIM}  ✓ Found non-www match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
@@ -273,6 +281,10 @@ manage_certificates() {
                         echo -e "${DIM}  → Domain '$domain' is ACTIVE${NC}"
                     else
                         echo -e "${DIM}  → Domain '$domain' is ABANDONED${NC}"
+                        # Double check by doing a grep search
+                        if sudo grep -q "^${domain}[[:space:]]*{" "$CADDYFILE" 2>/dev/null; then
+                            echo -e "${YELLOW}  ⚠️  WARNING: Domain might actually be in Caddyfile!${NC}"
+                        fi
                         abandoned_domains+=("$domain")
                         abandoned_paths+=("$path")
                     fi
