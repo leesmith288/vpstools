@@ -176,7 +176,6 @@ manage_certificates() {
                 active_domains=()
                 if [ -f "$CADDYFILE" ]; then
                     # Read the Caddyfile and extract domains
-                    # This handles multiple formats including simple domain definitions
                     while IFS= read -r line; do
                         # Remove comments and trim whitespace
                         line=$(echo "$line" | sed 's/#.*//' | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -185,10 +184,6 @@ manage_certificates() {
                         [ -z "$line" ] && continue
                         
                         # Check if line starts with a domain-like pattern followed by space or {
-                        # This catches patterns like:
-                        # domain.com {
-                        # subdomain.domain.com {
-                        # *.domain.com {
                         if [[ "$line" =~ ^([a-zA-Z0-9][a-zA-Z0-9\.\-]*\.[a-zA-Z]{2,})[[:space:]]*\{ ]]; then
                             domain="${BASH_REMATCH[1]}"
                             # Remove wildcard if present
@@ -237,9 +232,14 @@ manage_certificates() {
                     fi
                 done
                 
-                echo -e "${GREEN}Found ${#cert_domains[@]} domains with certificates${NC}\n"
+                echo -e "${GREEN}Found ${#cert_domains[@]} domains with certificates${NC}"
+                echo -e "${DIM}Certificate domains:${NC}"
+                for cert_dom in "${cert_domains[@]}"; do
+                    echo -e "${DIM}  - $cert_dom${NC}"
+                done
+                echo
                 
-                # Find abandoned domains
+                # Find abandoned domains - FIX THE LOGIC HERE
                 abandoned_domains=()
                 abandoned_paths=()
                 
@@ -248,21 +248,37 @@ manage_certificates() {
                     path="${cert_paths[$i]}"
                     is_active=false
                     
+                    # Debug output
+                    echo -e "${DIM}Checking if '$domain' is active...${NC}"
+                    
                     # Check if this certificate domain matches any active domain
                     for active_domain in "${active_domains[@]}"; do
-                        if [ "$domain" = "$active_domain" ] || \
-                           [ "$domain" = "www.$active_domain" ] || \
-                           [ "$active_domain" = "www.$domain" ]; then
+                        # Debug comparison
+                        if [ "$domain" = "$active_domain" ]; then
+                            echo -e "${DIM}  ✓ Found exact match with active domain '$active_domain'${NC}"
+                            is_active=true
+                            break
+                        elif [ "$domain" = "www.$active_domain" ]; then
+                            echo -e "${DIM}  ✓ Found www variant match with active domain '$active_domain'${NC}"
+                            is_active=true
+                            break
+                        elif [ "$active_domain" = "www.$domain" ]; then
+                            echo -e "${DIM}  ✓ Found non-www match with active domain '$active_domain'${NC}"
                             is_active=true
                             break
                         fi
                     done
                     
-                    if [ "$is_active" = false ]; then
+                    if [ "$is_active" = true ]; then
+                        echo -e "${DIM}  → Domain '$domain' is ACTIVE${NC}"
+                    else
+                        echo -e "${DIM}  → Domain '$domain' is ABANDONED${NC}"
                         abandoned_domains+=("$domain")
                         abandoned_paths+=("$path")
                     fi
                 done
+                
+                echo
                 
                 # Display results
                 if [ ${#abandoned_domains[@]} -eq 0 ]; then
@@ -271,14 +287,13 @@ manage_certificates() {
                 else
                     echo -e "${YELLOW}⚠️  Found ${#abandoned_domains[@]} abandoned certificate(s):${NC}\n"
                     
-                    # Fix the numbering issue here
                     for i in "${!abandoned_domains[@]}"; do
                         num=$((i + 1))
                         echo -e "  ${RED}${num})${NC} ${abandoned_domains[$i]}"
                         # Show certificate size
                         if [ -d "${abandoned_paths[$i]}" ]; then
                             size=$(sudo du -sh "${abandoned_paths[$i]}" 2>/dev/null | cut -f1)
-                            echo -e "     ${DIM}Size: $size | Path: ${abandoned_paths[$i]}${NC}"
+                            echo -e "     ${DIM}Size: $size${NC}"
                         fi
                     done
                     
