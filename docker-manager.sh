@@ -630,7 +630,7 @@ show_project_actions() {
     done
 }
 
-# IMPROVED: View container logs - Shows last hour immediately
+# View container logs - default: last 50 lines, with options incl. last hour
 view_container_logs() {
     local container=$1
     
@@ -640,21 +640,21 @@ view_container_logs() {
         echo ""
         echo -e "${CYAN}${BOLD}    LOGS: ${WHITE}${container}${NC}"
         echo ""
-        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${DIM}    ═════════════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
-        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${BLUE}${BOLD}    Showing last 50 lines:${NC}"
+        echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         
-        # Show last hour logs immediately
-        docker logs --since 1h "$container" 2>&1 | colorize_logs
+        # Show last 50 lines immediately
+        docker logs --tail 50 "$container" 2>&1 | colorize_logs
         
         echo ""
-        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${DIM}    ═════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
         echo ""
-        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
+        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Today's logs    ${YELLOW}[3]${NC} Last 100 lines    ${YELLOW}[4]${NC} Follow live    ${YELLOW}[0]${NC} Back"
         echo ""
         
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
@@ -663,29 +663,39 @@ view_container_logs() {
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from the last hour:${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs
+                docker logs --since 1h "$container" 2>&1 | colorize_logs
                 press_enter
                 ;;
             2)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker logs --tail 100 "$container" 2>&1 | colorize_logs
+                docker logs --since "$(date '+%Y-%m-%d')T00:00:00" "$container" 2>&1 | colorize_logs
                 press_enter
                 ;;
             3)
                 clear
                 echo ""
+                echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
+                echo ""
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker logs --tail 100 "$container" 2>&1 | colorize_logs
+                press_enter
+                ;;
+            4)
+                clear
+                echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
                 docker logs -f --tail 50 "$container" 2>&1 | colorize_logs
                 echo ""
@@ -701,7 +711,7 @@ view_container_logs() {
     done
 }
 
-# IMPROVED: View project logs - Shows last hour immediately
+# View project logs - default: last 50 lines, with options incl. last hour
 view_project_logs() {
     local project_path=$1
     cd "$project_path" || return
@@ -712,21 +722,21 @@ view_project_logs() {
         echo ""
         echo -e "${CYAN}${BOLD}    PROJECT LOGS: ${WHITE}$(basename "$project_path")${NC}"
         echo ""
-        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${DIM}    ═════════════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo -e "${BLUE}${BOLD}    Showing last hour of logs:${NC}"
-        echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+        echo -e "${BLUE}${BOLD}    Showing last 50 lines:${NC}"
+        echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
         echo ""
         
-        # Show last hour logs immediately
-        docker compose logs --since 1h 2>&1 | colorize_logs
+        # Show last 50 lines immediately
+        docker compose logs --tail 50 2>&1 | colorize_logs
         
         echo ""
-        echo -e "${DIM}    ════════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${DIM}    ═════════════════════════════════════════════════════════════════════${NC}"
         echo ""
         echo -e "${WHITE}${BOLD}    OTHER OPTIONS:${NC}"
         echo ""
-        echo -e "    ${YELLOW}[1]${NC} Today's logs    ${YELLOW}[2]${NC} Last 100 lines    ${YELLOW}[3]${NC} Follow live    ${YELLOW}[0]${NC} Back"
+        echo -e "    ${YELLOW}[1]${NC} Last hour    ${YELLOW}[2]${NC} Today's logs    ${YELLOW}[3]${NC} Last 100 lines    ${YELLOW}[4]${NC} Follow live    ${YELLOW}[0]${NC} Back"
         echo ""
         
         read -p "$(echo -e "    ${YELLOW}${BOLD}Select (or press Enter to go back): ${NC}")" choice
@@ -735,29 +745,39 @@ view_project_logs() {
             1)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from the last hour:${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs
+                docker compose logs --since 1h 2>&1 | colorize_logs
                 press_enter
                 ;;
             2)
                 clear
                 echo ""
-                echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
+                echo -e "${BLUE}${BOLD}    Logs from today:${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
-                docker compose logs --tail 100 2>&1 | colorize_logs
+                docker compose logs --since "$(date '+%Y-%m-%d')T00:00:00" 2>&1 | colorize_logs
                 press_enter
                 ;;
             3)
                 clear
                 echo ""
+                echo -e "${BLUE}${BOLD}    Last 100 lines:${NC}"
+                echo ""
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
+                echo ""
+                docker compose logs --tail 100 2>&1 | colorize_logs
+                press_enter
+                ;;
+            4)
+                clear
+                echo ""
                 echo -e "${BLUE}${BOLD}    Following live logs (Ctrl+C to stop):${NC}"
                 echo ""
-                echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+                echo -e "${DIM}    ─────────────────────────────────────────────────────────────────────${NC}"
                 echo ""
                 docker compose logs -f --tail 50 2>&1 | colorize_logs
                 echo ""
