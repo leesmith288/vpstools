@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Caddy Manager - Part of VPS Tools Suite
 # Host as: caddy-manager.sh
 
@@ -49,9 +48,9 @@ ensure_tree_installed() {
 # Function to manage certificates
 manage_certificates() {
     clear
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗[...]"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     
     # Ensure tree is installed
     if ! ensure_tree_installed; then
@@ -63,7 +62,7 @@ manage_certificates() {
     
     CERT_DIR="/var/lib/caddy/.local/share/caddy/certificates"
     CADDYFILE="/etc/caddy/Caddyfile"
-
+    
     # Minimal, robust hostname normalizer (lowercase, remove wildcard, keep only valid ASCII hostname chars)
     normalize_host() {
         local s="$1"
@@ -84,12 +83,10 @@ manage_certificates() {
     if ! sudo test -d "$CERT_DIR"; then
         echo -e "${YELLOW}Certificate directory not accessible at: $CERT_DIR${NC}"
         echo -e "${DIM}Checking with elevated permissions...${NC}"
-        
         if sudo test -d "/var/lib/caddy/.local/share/caddy"; then
             echo -e "${GREEN}Parent directory exists, checking for certificates...${NC}"
             sudo ls -la "/var/lib/caddy/.local/share/caddy/" 2>/dev/null
         fi
-        
         echo -e "\n${YELLOW}Press Enter to return...${NC}"
         read
         return
@@ -97,9 +94,9 @@ manage_certificates() {
     
     while true; do
         clear
-        echo -e "${CYAN}╔═════════════════════════════════════════════════════════��[...]"
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
         echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
-        echo -e "${CYAN}╚═════════════════════════════════════════════════════════��[...]"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
         
         echo -e "${GREEN}${BOLD}Options:${NC}"
         echo -e "${YELLOW}  1)${NC} 📂 View certificate tree structure"
@@ -186,6 +183,7 @@ manage_certificates() {
                 
                 echo -e "${DIM}Reading domains from Caddyfile...${NC}"
                 active_domains=()
+                
                 if [ -f "$CADDYFILE" ]; then
                     while IFS= read -r line; do
                         line=$(echo "$line" | sed 's/#.*//' | sed 's/^[ \t]*//;s/[ \t]*$//')
@@ -254,7 +252,6 @@ manage_certificates() {
                     is_active=false
                     
                     echo -e "${DIM}Checking if '$domain' is active...${NC}"
-                    
                     for active_domain in "${active_domains[@]}"; do
                         if [[ "$domain" == "$active_domain" ]]; then
                             echo -e "${DIM}  ✓ Found exact match with active domain '$active_domain'${NC}"
@@ -313,13 +310,10 @@ manage_certificates() {
                                 echo -e "  ${YELLOW}→${NC} $domain"
                             done
                             
-                            echo -ne "\n${BOLD}Type ${RED}DELETE${NC}${BOLD} to confirm:${NC} "
-                            read -r confirm_all
-                            
-                            if [[ "$confirm_all" == "DELETE" ]]; then
+                            read -p "$(echo -e "\n${BOLD}Confirm deletion? (y/N): ${NC}")" -n 1 -r confirm_all                            echo
+                            if [[ $confirm_all =~ ^[Yy]$ ]]; then
                                 deleted_count=0
                                 failed_count=0
-                                
                                 for i in "${!abandoned_paths[@]}"; do
                                     echo -e "${CYAN}Deleting ${abandoned_domains[$i]}...${NC}"
                                     if sudo rm -rf "${abandoned_paths[$i]}"; then
@@ -330,7 +324,6 @@ manage_certificates() {
                                         ((failed_count++))
                                     fi
                                 done
-                                
                                 echo -e "\n${GREEN}Deleted $deleted_count certificate(s)${NC}"
                                 if [ $failed_count -gt 0 ]; then
                                     echo -e "${RED}Failed to delete $failed_count certificate(s)${NC}"
@@ -422,13 +415,11 @@ manage_certificates() {
                                         echo -e "  ${YELLOW}→${NC} ${abandoned_domains[$idx]}  ${DIM}(${abandoned_paths[$idx]})${NC}"
                                     done
                                     
-                                    echo -ne "\n${BOLD}Type ${RED}DELETE${NC}${BOLD} to confirm:${NC} "
-                                    read -r confirm_selected
-                                    
-                                    if [[ "$confirm_selected" == "DELETE" ]]; then
+                                    read -p "$(echo -e "\n${BOLD}Confirm deletion? (y/N): ${NC}")" -n 1 -r confirm_selected
+                                    echo
+                                    if [[ $confirm_selected =~ ^[Yy]$ ]]; then
                                         deleted_count=0
                                         failed_count=0
-                                        
                                         for idx in "${to_delete_indices[@]}"; do
                                             echo -e "${CYAN}Deleting ${abandoned_domains[$idx]}...${NC}"
                                             if sudo rm -rf "${abandoned_paths[$idx]}"; then
@@ -439,7 +430,6 @@ manage_certificates() {
                                                 ((failed_count++))
                                             fi
                                         done
-                                        
                                         echo -e "\n${GREEN}Deleted $deleted_count certificate(s)${NC}"
                                         if [ $failed_count -gt 0 ]; then
                                             echo -e "${RED}Failed to delete $failed_count certificate(s)${NC}"
@@ -475,9 +465,9 @@ manage_certificates() {
 
 # Function to update Caddy with Cloudflare plugin
 update_caddy_cloudflare() {
-    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════�[...]"
+    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}${BOLD}         Update Caddy with Cloudflare Plugin              ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     
     # Detect architecture
     ARCH=$(uname -m)
@@ -590,17 +580,16 @@ update_caddy_cloudflare() {
 caddy_menu() {
     # First, ensure Caddy is held when starting the script
     clear
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗[...]"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC}${BOLD}           Checking Caddy Protection Status               ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
-    
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     ensure_caddy_held
     
     while true; do
         clear
-        echo -e "${CYAN}╔═════════════════════════════════════════════════════════��[...]"
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
         echo -e "${CYAN}║${NC}${BOLD}                 🌐 Caddy Web Server Manager              ${NC}${CYAN}║${NC}"
-        echo -e "${CYAN}╚═════════════════════════════════════════════════════════��[...]"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
         
         # Check Caddy status
         if systemctl is-active --quiet caddy 2>/dev/null; then
@@ -616,7 +605,7 @@ caddy_menu() {
             echo -e "${YELLOW}⚠️  Update Protection: Disabled${NC}"
         fi
         
-        echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N[...]"
+        echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         
         echo -e "${GREEN}${BOLD}Configuration:${NC}"
         echo -e "${YELLOW}  1)${NC} 📝 Edit Caddyfile"
@@ -648,6 +637,7 @@ caddy_menu() {
                     echo -e "\n${CYAN}Opening Caddyfile...${NC}"
                     sudo ${EDITOR:-nano} "$CADDYFILE"
                 else
+                    echo -e                    
                     echo -e "${RED}Caddyfile not found at $CADDYFILE${NC}"
                     read -p "Enter Caddyfile path: " custom_path
                     [ -f "$custom_path" ] && sudo ${EDITOR:-nano} "$custom_path"
