@@ -801,7 +801,7 @@ colorize_logs() {
     sed -E "s/\b([4-5][0-9]{2})\b/$(printf '\033[1;91m')&$(printf '\033[0m')/g"
 }
 
-# IMPROVED: Single deep cleanup with one confirmation
+# IMPROVED: Single deep cleanup with proper volume handling
 clean_docker() {
     clear
     echo ""
@@ -813,71 +813,124 @@ clean_docker() {
     echo -e "${CYAN}${BOLD}    ╚════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo ""
-    
     echo -e "${WHITE}${BOLD}    CURRENT DISK USAGE${NC}"
     echo ""
     docker system df | sed 's/^/    /'
     echo ""
     echo ""
     
-    echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+    # Get detailed volume info
+    echo -e "${WHITE}${BOLD}    VOLUME DETAILS${NC}"
+    echo ""
+    docker system df -v 2>/dev/null | grep -A 100 "Local Volumes space usage:" | grep -v "Build cache" | sed 's/^/    /' || true
     echo ""
     echo ""
     
+    echo -e "${DIM}    ────────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+    echo ""
     echo -e "${YELLOW}${BOLD}    This will remove:${NC}"
     echo ""
     echo -e "        ${DOT}  All stopped containers"
     echo -e "        ${DOT}  All unused networks"
     echo -e "        ${DOT}  ${ORANGE}${BOLD}ALL unused images${NC} ${DIM}(not used by any container)${NC}"
     echo -e "        ${DOT}  All build cache"
-    echo -e "        ${DOT}  All unused volumes ${DIM}(if confirmed)${NC}"
+    echo -e "        ${DOT}  ${ORANGE}${BOLD}ALL unused volumes${NC} ${DIM}(including named volumes)${NC}"
     echo ""
     echo ""
     echo -e "    ${ORANGE}${WARNING}  This includes:${NC}"
     echo -e "        ${DIM}- Old image versions after updates${NC}"
     echo -e "        ${DIM}- Images from deleted projects${NC}"
     echo -e "        ${DIM}- Images pulled but never used${NC}"
+    echo -e "        ${DIM}- ${ORANGE}${BOLD}Data volumes from removed projects${NC}"
     echo ""
     echo -e "    ${GREEN}${BOLD}✓  Safe: Running containers and their resources are protected${NC}"
     echo ""
     echo ""
-    
     read -p "$(echo -e "    ${ORANGE}${BOLD}Proceed with cleanup? (y/N): ${NC}")" confirm
     
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         echo ""
-        echo -e "    ${YELLOW}Step 1/3: Running system prune...${NC}"
+        echo -e "    ${YELLOW}Step 1/4: Running system prune...${NC}"
         echo ""
         docker system prune -a -f 2>&1 | sed 's/^/    /'
         
         echo ""
-        echo -e "    ${YELLOW}Step 2/3: Checking for unused volumes...${NC}"
+        echo -e "    ${YELLOW}Step 2/4: Checking for unused volumes...${NC}"
         echo ""
         
-        # Check and remove unused volumes without asking again
-        local unused_volumes=$(docker volume ls -qf dangling=true 2>/dev/null | wc -l)
-        if [ "$unused_volumes" -gt 0 ]; then
-            echo -e "    ${YELLOW}Found ${unused_volumes} unused volumes. Removing...${NC}"
-            docker volume prune -f 2>&1 | sed 's/^/    /'
+        # Get list of volumes not attached to any containers (running or stopped)
+        local all_volumes=$(docker volume ls -q 2>/dev/null)
+        local used_volumes=$(docker ps -a --format '{{.ID}}' 2>/dev/null | xargs -r docker inspect --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' 2>/dev/null | sort -u)
+        
+        # Find unused volumes
+        local unused_volumes=()
+        if [ -n "$all_volumes" ]; then
+            while IFS= read -r vol; do
+                if ! echo "$used_volumes" | grep -q "^${vol}$"; then
+                    unused_volumes+=("$vol")
+                fi
+            done <<< "$all_volumes"
+        fi
+        
+        if [ ${#unused_volumes[@]} -gt 0 ]; then
+            echo -e "    ${YELLOW}Found ${#unused_volumes[@]} unused volume(s):${NC}"
+            echo ""
+            for vol in "${unused_volumes[@]}"; do
+                # Get volume size
+                local vol_size=$(docker system df -v 2>/dev/null | grep -w "$vol" | awk '{print $(NF-1)" "$NF}' | head -1)
+                if [ -z "$vol_size" ]; then
+                    vol_size="unknown size"
+                fi
+                echo -e "        ${DIM}- ${vol} (${vol_size})${NC}"
+            done
+            echo ""
+            read -p "$(echo -e "    ${ORANGE}${BOLD}Remove these unused volumes? (y/N): ${NC}")" vol_confirm
+            
+            if [[ "$vol_confirm" =~ ^[Yy]$ ]]; then
+                echo ""
+                local removed=0
+                local failed=0
+                for vol in "${unused_volumes[@]}"; do
+                    if docker volume rm "$vol" >/dev/null 2>&1; then
+                        echo -e "    ${GREEN}${CHECK}  Removed: ${vol}${NC}"
+                        ((removed++))
+                    else
+                        echo -e "    ${RED}${CROSS}  Failed: ${vol}${NC}"
+                        ((failed++))
+                    fi
+                done
+                echo ""
+                echo -e "    ${GREEN}Removed ${removed} volume(s)${NC}"
+                [ $failed -gt 0 ] && echo -e "    ${RED}Failed to remove ${failed} volume(s)${NC}"
+            else
+                echo -e "    ${YELLOW}Skipped volume removal${NC}"
+            fi
         else
             echo -e "    ${GREEN}No unused volumes found${NC}"
         fi
         
         echo ""
-        echo -e "    ${YELLOW}Step 3/3: Final cleanup...${NC}"
+        echo -e "    ${YELLOW}Step 3/4: Removing dangling/anonymous volumes...${NC}"
         echo ""
+        docker volume prune -f 2>&1 | sed 's/^/    /'
         
-        # Clean up builder cache
+        echo ""
+        echo -e "    ${YELLOW}Step 4/4: Final cleanup (build cache)...${NC}"
+        echo ""
         docker builder prune -af 2>/dev/null | sed 's/^/    /'
         
         echo ""
         echo -e "    ${GREEN}${BOLD}${CHECK}  Cleanup complete!${NC}"
         echo ""
         echo ""
-        
         echo -e "${WHITE}${BOLD}    DISK USAGE AFTER CLEANUP${NC}"
         echo ""
         docker system df | sed 's/^/    /'
+        echo ""
+        
+        # Show what was reclaimed
+        echo -e "${DIM}    Tip: Compare the 'RECLAIMABLE' column above with the initial state${NC}"
         
         press_enter
         refresh_cache
