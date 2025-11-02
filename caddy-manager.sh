@@ -49,9 +49,9 @@ ensure_tree_installed() {
 # Function to manage certificates
 manage_certificates() {
     clear
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗[...]"
     echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
     
     # Ensure tree is installed
     if ! ensure_tree_installed; then
@@ -97,9 +97,9 @@ manage_certificates() {
     
     while true; do
         clear
-        echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}╔═════════════════════════════════════════════════════════��[...]"
         echo -e "${CYAN}║${NC}${BOLD}              🔐 Certificate Management                    ${NC}${CYAN}║${NC}"
-        echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+        echo -e "${CYAN}╚═════════════════════════════════════════════════════════��[...]"
         
         echo -e "${GREEN}${BOLD}Options:${NC}"
         echo -e "${YELLOW}  1)${NC} 📂 View certificate tree structure"
@@ -288,13 +288,18 @@ manage_certificates() {
                 else
                     echo -e "${YELLOW}⚠️  Found ${#abandoned_domains[@]} abandoned certificate(s):${NC}\n"
                     
-                    for i in "${!abandoned_domains[@]}"; do
-                        num=$((i + 1))
-                        echo -e "  ${RED}${num})${NC} ${abandoned_domains[$i]}"
-                    done
+                    # Helper: show numbered abandoned list
+                    show_abandoned_list() {
+                        for i in "${!abandoned_domains[@]}"; do
+                            num=$((i + 1))
+                            echo -e "  ${RED}${num})${NC} ${abandoned_domains[$i]}  ${DIM}(${abandoned_paths[$i]})${NC}"
+                        done
+                    }
+                    
+                    show_abandoned_list
                     
                     echo -e "\n${CYAN}What would you like to do?${NC}"
-                    echo -e "${YELLOW}  1)${NC} Delete all abandoned certificates"
+                    echo -e "${YELLOW}  1)${NC} Delete ALL abandoned certificates"
                     echo -e "${YELLOW}  2)${NC} Delete specific certificate(s)"
                     echo -e "${YELLOW}  0)${NC} Cancel\n"
                     
@@ -308,11 +313,10 @@ manage_certificates() {
                                 echo -e "  ${YELLOW}→${NC} $domain"
                             done
                             
-                            echo -e "\n${BOLD}Are you sure? (y/N):${NC} "
-                            read -n 1 -r confirm_all
-                            echo
+                            echo -ne "\n${BOLD}Type ${RED}DELETE${NC}${BOLD} to confirm:${NC} "
+                            read -r confirm_all
                             
-                            if [[ $confirm_all =~ ^[Yy]$ ]]; then
+                            if [[ "$confirm_all" == "DELETE" ]]; then
                                 deleted_count=0
                                 failed_count=0
                                 
@@ -337,42 +341,109 @@ manage_certificates() {
                             ;;
                             
                         2) # Delete specific
-                            echo -e "\n${CYAN}Enter the numbers of certificates to delete (space-separated):${NC}"
-                            echo -e "${DIM}Example: 1 3 4${NC}"
-                            read -p "Numbers: " selected_nums
-                            
-                            if [ -z "$selected_nums" ]; then
-                                echo -e "${YELLOW}No selection made${NC}"
-                            else
-                                to_delete=()
-                                for num in $selected_nums; do
-                                    if [[ "$num" =~ ^[0-9]+$ ]] && [ $num -ge 1 ] && [ $num -le ${#abandoned_domains[@]} ]; then
-                                        index=$((num - 1))
-                                        to_delete+=($index)
+                            # Parser for selections: numbers (1,2), ranges (1-3), domains (example.com)
+                            parse_selection() {
+                                local input="$1"
+                                local -n out_ref="$2"
+                                out_ref=()
+                                
+                                # Build a map of domain->index for quick lookup
+                                declare -A dom_to_idx=()
+                                for i in "${!abandoned_domains[@]}"; do
+                                    dom_to_idx["${abandoned_domains[$i]}"]="$i"
+                                done
+                                
+                                for token in $input; do
+                                    # Skip obvious cancel
+                                    [[ "$token" == "0" ]] && continue
+                                    
+                                    if [[ "$token" =~ ^[0-9]+-[0-9]+$ ]]; then
+                                        IFS='-' read -r start end <<< "$token"
+                                        if [[ $start -ge 1 && $end -ge $start && $end -le ${#abandoned_domains[@]} ]]; then
+                                            for ((n=start; n<=end; n++)); do
+                                                out_ref+=($((n-1)))
+                                            done
+                                        else
+                                            echo -e "${RED}Invalid range: $token${NC}"
+                                        fi
+                                    elif [[ "$token" =~ ^[0-9]+$ ]]; then
+                                        local n="$token"
+                                        if [[ $n -ge 1 && $n -le ${#abandoned_domains[@]} ]]; then
+                                            out_ref+=($((n-1)))
+                                        else
+                                            echo -e "${RED}Invalid number: $token${NC}"
+                                        fi
                                     else
-                                        echo -e "${RED}Invalid number: $num${NC}"
+                                        # Treat as domain
+                                        local d
+                                        d=$(normalize_host "$token")
+                                        if [[ -n "${dom_to_idx[$d]}" ]]; then
+                                            out_ref+=("${dom_to_idx[$d]}")
+                                        else
+                                            echo -e "${RED}Unknown domain: $token${NC}"
+                                        fi
                                     fi
                                 done
                                 
-                                if [ ${#to_delete[@]} -gt 0 ]; then
+                                # Deduplicate while preserving order
+                                if [ ${#out_ref[@]} -gt 0 ]; then
+                                    local -a unique=()
+                                    declare -A seen=()
+                                    for idx in "${out_ref[@]}"; do
+                                        if [[ -z "${seen[$idx]}" ]]; then
+                                            unique+=("$idx")
+                                            seen[$idx]=1
+                                        fi
+                                    done
+                                    out_ref=("${unique[@]}")
+                                fi
+                            }
+                            
+                            echo -e "\n${CYAN}Abandoned certificates:${NC}"
+                            show_abandoned_list
+                            
+                            echo -e "\n${CYAN}Enter selection(s):${NC}"
+                            echo -e "${DIM}- Accepts numbers, ranges, or domain names${NC}"
+                            echo -e "${DIM}- Examples: 1   |  1 3 4   |  2-5   |  api.example.com www.example.com${NC}"
+                            echo -e "${DIM}- Enter 0 or press Enter to cancel${NC}"
+                            read -p "Selection: " -r selected_input
+                            
+                            if [ -z "$selected_input" ] || [[ "$selected_input" == "0" ]]; then
+                                echo -e "${YELLOW}No selection made. Cancelled.${NC}"
+                            else
+                                to_delete_indices=()
+                                parse_selection "$selected_input" to_delete_indices
+                                
+                                if [ ${#to_delete_indices[@]} -eq 0 ]; then
+                                    echo -e "${YELLOW}No valid selections.${NC}"
+                                else
                                     echo -e "\n${YELLOW}Will delete:${NC}"
-                                    for idx in "${to_delete[@]}"; do
-                                        echo -e "  ${YELLOW}→${NC} ${abandoned_domains[$idx]}"
+                                    for idx in "${to_delete_indices[@]}"; do
+                                        echo -e "  ${YELLOW}→${NC} ${abandoned_domains[$idx]}  ${DIM}(${abandoned_paths[$idx]})${NC}"
                                     done
                                     
-                                    echo -e "\n${BOLD}Confirm deletion? (y/N):${NC} "
-                                    read -n 1 -r confirm_selected
-                                    echo
+                                    echo -ne "\n${BOLD}Type ${RED}DELETE${NC}${BOLD} to confirm:${NC} "
+                                    read -r confirm_selected
                                     
-                                    if [[ $confirm_selected =~ ^[Yy]$ ]]; then
-                                        for idx in "${to_delete[@]}"; do
+                                    if [[ "$confirm_selected" == "DELETE" ]]; then
+                                        deleted_count=0
+                                        failed_count=0
+                                        
+                                        for idx in "${to_delete_indices[@]}"; do
                                             echo -e "${CYAN}Deleting ${abandoned_domains[$idx]}...${NC}"
                                             if sudo rm -rf "${abandoned_paths[$idx]}"; then
                                                 echo -e "${GREEN}  ✓ Deleted${NC}"
+                                                ((deleted_count++))
                                             else
                                                 echo -e "${RED}  ✗ Failed${NC}"
+                                                ((failed_count++))
                                             fi
                                         done
+                                        
+                                        echo -e "\n${GREEN}Deleted $deleted_count certificate(s)${NC}"
+                                        if [ $failed_count -gt 0 ]; then
+                                            echo -e "${RED}Failed to delete $failed_count certificate(s)${NC}"
+                                        fi
                                     else
                                         echo -e "${YELLOW}Deletion cancelled${NC}"
                                     fi
@@ -404,9 +475,9 @@ manage_certificates() {
 
 # Function to update Caddy with Cloudflare plugin
 update_caddy_cloudflare() {
-    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n${CYAN}╔══════════════════════════════════════════════════════════�[...]"
     echo -e "${CYAN}║${NC}${BOLD}         Update Caddy with Cloudflare Plugin              ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
     
     # Detect architecture
     ARCH=$(uname -m)
@@ -519,17 +590,17 @@ update_caddy_cloudflare() {
 caddy_menu() {
     # First, ensure Caddy is held when starting the script
     clear
-    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗[...]"
     echo -e "${CYAN}║${NC}${BOLD}           Checking Caddy Protection Status               ${NC}${CYAN}║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝[...]"
     
     ensure_caddy_held
     
     while true; do
         clear
-        echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}╔═════════════════════════════════════════════════════════��[...]"
         echo -e "${CYAN}║${NC}${BOLD}                 🌐 Caddy Web Server Manager              ${NC}${CYAN}║${NC}"
-        echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+        echo -e "${CYAN}╚═════════════════════════════════════════════════════════��[...]"
         
         # Check Caddy status
         if systemctl is-active --quiet caddy 2>/dev/null; then
@@ -545,7 +616,7 @@ caddy_menu() {
             echo -e "${YELLOW}⚠️  Update Protection: Disabled${NC}"
         fi
         
-        echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+        echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N[...]"
         
         echo -e "${GREEN}${BOLD}Configuration:${NC}"
         echo -e "${YELLOW}  1)${NC} 📝 Edit Caddyfile"
